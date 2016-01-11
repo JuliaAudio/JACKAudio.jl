@@ -3,7 +3,7 @@ if VERSION >= v"0.5.0-"
 else
     using BaseTestNext
 end
-using JACK
+using JACKAudio
 
 @testset "JACK Tests" begin
     @testset "Opening Client" begin

@@ -10,8 +10,8 @@ notifications:
   email: false
 script:
  # SampleTypes is unregistered so clone it for testing
- - julia -e 'Pkg.clone("https://github.com/ssfrr/SampleTypes.jl.git")'
+ - julia -e 'Pkg.clone("https://github.com/JuliaAudio/SampleTypes.jl.git")'
  - if [[ -a .git/shallow ]]; then git fetch --unshallow; fi
- - julia -e 'Pkg.clone(pwd()); Pkg.build("JACK"); Pkg.test("JACK"; coverage=true)'
+ - julia -e 'Pkg.clone(pwd()); Pkg.build("JACKAudio"); Pkg.test("JACKAudio"; coverage=true)'
 after_success:
-  - julia -e 'cd(Pkg.dir("JACK")); Pkg.add("Coverage"); using Coverage; Codecov.submit(process_folder())'
+  - julia -e 'cd(Pkg.dir("JACKAudio")); Pkg.add("Coverage"); using Coverage; Codecov.submit(process_folder())'

@@ -1,4 +1,4 @@
-module JACK
+module JACKAudio
 
 include("jack_types.jl")
 
