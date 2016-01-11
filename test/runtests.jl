@@ -1,5 +1,12 @@
+if VERSION >= v"0.5.0-"
+    using Base.Test
+else
+    using BaseTestNext
+end
 using JACK
-using Base.Test
 
-# write your own tests here
-@test 1 == 1
+@testset "JACK Tests" begin
+    @testset "Opening Client" begin
+        client = JackClient()
+    end
+end
