@@ -1,7 +1,11 @@
-typealias JackClient Ptr{Void}
-typealias JackPort Ptr{Void}
+typealias ClientPtr Ptr{Void}
+typealias PortPtr Ptr{Void}
+typealias NFrames UInt32
+typealias CFunPtr Ptr{Void}
 
-@enum(JackOption,
+const JACK_DEFAULT_AUDIO_TYPE = "32 bit float mono audio"
+
+@enum(Option,
     # Null value to use when no option bits are needed.
     NullOption = 0x00,
     # Do not automatically start the JACK server when it is not
@@ -23,7 +27,19 @@ typealias JackPort Ptr{Void}
     # pass a SessionID Token this allows the sessionmanager to identify the client again.
     SessionID = 0x20)
 
-@enum(JackStatus,
+# useful for OR'ing options together
+Base.(:|)(l::Option, r::Option) = UInt(l) | UInt(r)
+    
+@enum(PortFlag,
+  PortIsInput = 0x01,
+  PortIsOutput = 0x02, 
+  PortIsPhysical = 0x04, 
+  PortCanMonitor = 0x08, 
+  PortIsTerminal = 0x10)
+  
+Base.(:|)(l::PortFlag, r::PortFlag) = UInt(l) | UInt(r)
+
+@enum(Status,
     Success = 0x00,
     # Overall operation failed.
     Failure = 0x01,
@@ -60,3 +76,18 @@ typealias JackPort Ptr{Void}
     BackendError = 0x800,
     # Client zombified failure
     ClientZombie = 0x1000)
+
+status_str(status::Status) = string(status)
+
+# use & syntax for checking a flag, but return a boolean
+Base.(:&){T <: Integer}(val::T, status::Status) = val & T(status) != 0
+
+function status_str(status::Integer)
+    if status == Int(Success)
+        string(Status(status))
+    else
+        selected = filter(flag -> status & UInt(flag) != 0, instances(Status))
+        join(selected, ", ")
+    end
+end
+    
