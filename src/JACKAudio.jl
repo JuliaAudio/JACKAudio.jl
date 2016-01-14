@@ -168,12 +168,10 @@ function Base.write(sink::JackSink, buf::Array{JackSample})
 end
 
 # This gets called from a separate thread, so it is VERY IMPORTANT that it not
-# allocate any memory or JIT compile when it's being run.
-# TODO: verify the types of things to make sure there aren't any unnecessary
-# conversions or boxed values
+# allocate any memory or JIT compile when it's being run. Here be segfaults.
 function process(nframes, clientPtr)
     clientPtr == Ptr{JackClient}(0) && return Cint(0)
-    nbytes = nframes * sizeof(JackSample)
+    nbytes::Csize_t = nframes * sizeof(JackSample)
     client = unsafe_pointer_to_objref(clientPtr)::JackClient
     for i in eachindex(client.sources)
         @inbounds source = client.sources[i]
