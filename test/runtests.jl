@@ -18,7 +18,7 @@ using JACKAudio
     #     @test alloc == 0
     # end
     @testset "Opening Client" begin
-        client = JackClient(active=false)
+        client = JackClient()
         source = JackSource(client, "TestSource")
         sink = JackSink(client, "TestSink")
         JACKAudio.activate(client)

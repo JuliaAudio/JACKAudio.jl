@@ -12,7 +12,9 @@ export JackSource, JackSink
 
 include("jack_types.jl")
 
-const RINGBUF_SAMPLES = 96000
+# the ringbuffer size will be this times sizeof(float) rounded up to the nearest
+# power of two
+const RINGBUF_SAMPLES = 131072
 
 function __init__()
     global const process_cb = cfunction(process, Cint, (NFrames, Ptr{JackClient}))
@@ -46,6 +48,7 @@ for (T, porttype) in [(:JackSource, :PortIsInput), (:JackSink, :PortIsOutput)]
         name::ASCIIString
         ptr::PortPtr
         ringbuf::Ptr{RingBuffer}
+        ringcondition::Condition # used to synchronize any in-progress transations
         
         function $T(client, name::ASCIIString)
             client.active && error("Ports an only be added to an inactive client")
@@ -56,7 +59,7 @@ for (T, porttype) in [(:JackSource, :PortIsInput), (:JackSink, :PortIsOutput)]
             end
             bufptr = jack_ringbuffer_create(RINGBUF_SAMPLES * sizeof(JackSample))
             
-            port = new(name, ptr, bufptr)
+            port = new(name, ptr, bufptr, Condition())
             push!(client, port)
             
             port
@@ -166,9 +169,22 @@ function Base.delete!(client::JackClient, sink::JackSink)
     jack_ringbuffer_free(sink.ringbuf)
 end
 
+# TODO: handle multiple writer situation
 function Base.write(sink::JackSink, buf::Array{JackSample})
-    nbytes = length(buf) * sizeof(JackSample)
-    jack_ringbuffer_write(sink.ringbuf, buf, nbytes)
+    nbytes = Csize_t(length(buf) * sizeof(JackSample))
+    arrptr = Ptr{Cchar}(pointer(buf))
+    n = jack_ringbuffer_write(sink.ringbuf, arrptr, nbytes)
+    nbytes -= n
+    arrptr += n
+    while nbytes > 0
+        # wait to be notified that some space has freed up in the ringbuf
+        wait(sink.ringcondition)
+        n = jack_ringbuffer_write(sink.ringbuf, arrptr, nbytes)
+        nbytes -= n
+        arrptr += n
+    end
+    # by now we know we've written the whole length of the buffer
+    return length(buf)
 end
 
 # This gets called from a separate thread, so it is VERY IMPORTANT that it not
@@ -199,9 +215,14 @@ function process(nframes, clientPtr)
 end
 
 # this callback gets called from within the Julia event loop, but is triggered
-# by every `process` call
+# by every `process` call. It bumps any tasks waiting to read or write
 function managebuffers(client)
-    # println("managebuffers called for client $(client.name)")
+    for source in client.sources
+        notify(source.ringcondition)
+    end
+    for sink in client.sinks
+        notify(sink.ringcondition)
+    end
 end
 
 function shutdown(arg)
@@ -234,12 +255,21 @@ jack_ringbuffer_read(ringbuf, dest, bytes) =
     ccall((:jack_ringbuffer_read, :libjack), Csize_t,
         (Ptr{RingBuffer}, Ptr{Void}, Csize_t), ringbuf, dest, bytes)
 
+jack_ringbuffer_read_space(ringbuf) =
+    ccall((:jack_ringbuffer_read_space, :libjack), Csize_t,
+        (Ptr{RingBuffer}, ), ringbuf)
+
 jack_ringbuffer_write(ringbuf, src, bytes) =
     ccall((:jack_ringbuffer_write, :libjack), Csize_t,
         (Ptr{RingBuffer}, Ptr{Void}, Csize_t), ringbuf, src, bytes)
 
+jack_ringbuffer_write_space(ringbuf) =
+    ccall((:jack_ringbuffer_write_space, :libjack), Csize_t,
+        (Ptr{RingBuffer}, ), ringbuf)
+
 memset(buf, val, count) = ccall(:memset, Ptr{Void},
     (Ptr{Void}, Cint, Csize_t),
     buf, 0, count)
-    
+
+
 end # module
