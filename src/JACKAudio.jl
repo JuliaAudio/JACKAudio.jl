@@ -44,7 +44,7 @@ end
 # JackSource and JackSink defs are almost identical, so DRY it out with some
 # metaprogramming magic
 for (T, porttype) in [(:JackSource, :PortIsInput), (:JackSink, :PortIsOutput)]
-    @eval immutable $T
+    @eval type $T
         name::ASCIIString
         ptr::PortPtr
         ringbuf::Ptr{RingBuffer}
@@ -170,7 +170,7 @@ function Base.delete!(client::JackClient, sink::JackSink)
 end
 
 # TODO: handle multiple writer situation
-function Base.write(sink::JackSink, buf::Array{JackSample})
+function Base.write(sink::JackSink, buf::Vector{JackSample})
     nbytes = Csize_t(length(buf) * sizeof(JackSample))
     arrptr = Ptr{Cchar}(pointer(buf))
     n = jack_ringbuffer_write(sink.ringbuf, arrptr, nbytes)
@@ -187,6 +187,26 @@ function Base.write(sink::JackSink, buf::Array{JackSample})
     return length(buf)
 end
 
+# TODO: handle multiple reader situation
+function Base.read!(source::JackSource, buf::Vector{JackSample})
+    nbytes = Csize_t(length(buf) * sizeof(JackSample))
+    arrptr = Ptr{Cchar}(pointer(buf))
+    # note, we could end up reading partial floats here, so things may be
+    # wacky if this process gets interrupted
+    n = jack_ringbuffer_read(source.ringbuf, arrptr, nbytes)
+    nbytes -= n
+    arrptr += n
+    while nbytes > 0
+        # wait to be notified that some space has freed up in the ringbuf
+        wait(source.ringcondition)
+        n = jack_ringbuffer_read(source.ringbuf, arrptr, nbytes)
+        nbytes -= n
+        arrptr += n
+    end
+    # by now we know we've read the whole length of the buffer
+    return length(buf)
+end
+
 # This gets called from a separate thread, so it is VERY IMPORTANT that it not
 # allocate any memory or JIT compile when it's being run. Here be segfaults.
 function process(nframes, clientPtr)
@@ -195,7 +215,14 @@ function process(nframes, clientPtr)
     client = unsafe_pointer_to_objref(clientPtr)::JackClient
     for i in eachindex(client.sources)
         @inbounds source = client.sources[i]
+        ringbuf = source.ringbuf
         buf = jack_port_get_buffer(source.ptr, nframes)
+        if nbytes > jack_ringbuffer_write_space(ringbuf)
+            # we wouldn't have enough space to write and would fill the buffer,
+            # which can cause things to get mis-aligned. Let's make some room
+            jack_ringbuffer_read_advance(ringbuf, nbytes)
+        end
+
         jack_ringbuffer_write(source.ringbuf, buf, nbytes)
     end
     for i in eachindex(client.sinks)
@@ -203,7 +230,7 @@ function process(nframes, clientPtr)
         buf = jack_port_get_buffer(sink.ptr, nframes)
         bytesread = jack_ringbuffer_read(sink.ringbuf, buf, nbytes)
         if bytesread != nbytes
-            memset(buf, 0, nbytes - bytesread)
+            memset(buf+bytesread, 0, nbytes - bytesread)
         end
     end
     
@@ -254,6 +281,10 @@ jack_ringbuffer_free(buf) =
 jack_ringbuffer_read(ringbuf, dest, bytes) =
     ccall((:jack_ringbuffer_read, :libjack), Csize_t,
         (Ptr{RingBuffer}, Ptr{Void}, Csize_t), ringbuf, dest, bytes)
+
+jack_ringbuffer_read_advance(ringbuf, bytes) =
+    ccall((:jack_ringbuffer_read_advance, :libjack), Void,
+        (Ptr{RingBuffer}, Csize_t), ringbuf, bytes)
 
 jack_ringbuffer_read_space(ringbuf) =
     ccall((:jack_ringbuffer_read_space, :libjack), Csize_t,
