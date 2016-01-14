@@ -70,6 +70,7 @@ type JackClient
     sources::Vector{JackSource}
     sinks::Vector{JackSink}
     active::Bool
+    callback::Base.SingleAsyncWork
 
     function JackClient(name::ASCIIString)
         status = Ref{Cint}(Int(Failure))
@@ -88,7 +89,10 @@ type JackClient
         end
         println("Opened JACK Client with status: ", status_str(status[]))
         
+        # note that we don't initialize the callback yet because we need to use
+        # the reference as an argument to the managebuffers call
         client = new(name, ptr, JackSource[], JackSink[], false)
+        client.callback = Base.SingleAsyncWork(data -> managebuffers(client))
         
         # give the client ptr as user data to the process callback, so we'll know which
         # client is being processed
@@ -187,7 +191,17 @@ function process(nframes, clientPtr)
         end
     end
     
+    # notify the managebuffers, which will get called with a reference to
+    # this client
+    ccall(:uv_async_send, Void, (Ptr{Void},), client.callback.handle)
+    
     Cint(0)
+end
+
+# this callback gets called from within the Julia event loop, but is triggered
+# by every `process` call
+function managebuffers(client)
+    # println("managebuffers called for client $(client.name)")
 end
 
 function shutdown(arg)
