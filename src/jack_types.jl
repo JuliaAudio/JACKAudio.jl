@@ -1,13 +1,13 @@
 typealias ClientPtr Ptr{Void}
 typealias PortPtr Ptr{Void}
-typealias NFrames UInt32
 typealias CFunPtr Ptr{Void}
+typealias NFrames UInt32
 typealias JackSample Cfloat
 
 const JACK_DEFAULT_AUDIO_TYPE = "32 bit float mono audio"
 
 # this mirrors the struct defined in ringbuffer.h
-type RingBuffer
+type RingBuf
     buf::Ptr{Cchar}
     write_ptr::Csize_t
     read_ptr::Csize_t
@@ -15,6 +15,8 @@ type RingBuffer
     size_mask::Csize_t
     mlocked::Cint
 end
+# add typealias for consistency with other *Ptr types
+typealias RingBufPtr Ptr{RingBuf}
 
 @enum(Option,
     # Null value to use when no option bits are needed.
