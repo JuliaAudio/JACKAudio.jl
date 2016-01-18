@@ -280,7 +280,7 @@ function Base.write{N, SR}(sink::JackSink{N, SR}, buf::SampleBuf{N, SR, JackSamp
         bytesleft[ch] -= n
         chanptrs[ch] += n
     end
-    while any(n -> n > 0, bytesleft)
+    while any(x -> x > 0, bytesleft)
         # wait to be notified that some space has freed up in the ringbuf
         wait(sink.ringcondition)
         for (ch, pair) in enumerate(sink.ptrs)
@@ -291,28 +291,33 @@ function Base.write{N, SR}(sink::JackSink{N, SR}, buf::SampleBuf{N, SR, JackSamp
     end
     
     # by now we know we've written the whole length of the buffer
-    return length(buf)
+    nframes(buf)
 end
 
 # TODO: handle multiple reader situation
-# TODO: handle multichannel
-function Base.read!(source::JackSource, buf::Vector{JackSample})
-    nbytes = Csize_t(length(buf) * sizeof(JackSample))
-    arrptr = Ptr{Cchar}(pointer(buf))
+function Base.read!{N, SR}(source::JackSource{N, SR}, buf::SampleBuf{N, SR, JackSample})
+    nbytes = Csize_t(nframes(buf) * sizeof(JackSample))
+    bytesleft = ones(Csize_t, N) * nbytes
+    chanptrs = Ptr{JackSample}[channelptr(buf, ch) for ch in 1:N]
     # note, we could end up reading partial floats here, so things may be
     # wacky if this process gets interrupted
-    n = jack_ringbuffer_read(source.ptrs[1].ringbuf, arrptr, nbytes)
-    nbytes -= n
-    arrptr += n
-    while nbytes > 0
-        # wait to be notified that some space has freed up in the ringbuf
-        wait(source.ringcondition)
-        n = jack_ringbuffer_read(source.ptrs[1].ringbuf, arrptr, nbytes)
-        nbytes -= n
-        arrptr += n
+    for (ch, pair) in enumerate(source.ptrs)
+        n = jack_ringbuffer_read(pair.ringbuf, chanptrs[ch], bytesleft[ch])
+        bytesleft[ch] -= n
+        chanptrs[ch] += n
     end
+    while any(x -> x > 0, bytesleft)
+        # wait to be notified that new samples are available in the ringbuf
+        wait(source.ringcondition)
+        for (ch, pair) in enumerate(source.ptrs)
+            n = jack_ringbuffer_read(pair.ringbuf, chanptrs[ch], bytesleft[ch])
+            bytesleft[ch] -= n
+            chanptrs[ch] += n
+        end
+    end
+    
     # by now we know we've read the whole length of the buffer
-    return length(buf)
+    nframes(buf)
 end
 
 # This gets called from a separate thread, so it is VERY IMPORTANT that it not
@@ -327,13 +332,13 @@ function process(nframes, portptrs)
         ringbuf = unsafe_load(portptrs, ptridx + 1)
         ptridx += 2
     
-        buf = jack_port_get_buffer(source, nframes)
         if nbytes > jack_ringbuffer_write_space(ringbuf)
             # we wouldn't have enough space to write and would fill the buffer,
             # which can cause things to get mis-aligned. Let's make some room
             jack_ringbuffer_read_advance(ringbuf, nbytes)
         end
 
+        buf = jack_port_get_buffer(source, nframes)
         jack_ringbuffer_write(ringbuf, buf, nbytes)
     end
     # skip over the null terminator
