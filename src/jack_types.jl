@@ -52,6 +52,7 @@ Base.(:|)(l::Option, r::Option) = UInt(l) | UInt(r)
   
 Base.(:|)(l::PortFlag, r::PortFlag) = UInt(l) | UInt(r)
 
+# some functions also return a -1 on failure
 @enum(Status,
     Success = 0x00,
     # Overall operation failed.
@@ -96,7 +97,9 @@ status_str(status::Status) = string(status)
 Base.(:&){T <: Integer}(val::T, status::Status) = val & T(status) != 0
 
 function status_str(status::Integer)
-    if status == Int(Success)
+    if status == -1
+        "GeneralError"
+    elseif status == Int(Success)
         string(Status(status))
     else
         selected = filter(flag -> status & UInt(flag) != 0, instances(Status))

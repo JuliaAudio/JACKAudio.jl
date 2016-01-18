@@ -2,6 +2,7 @@ __precompile__()
 
 module JACKAudio
 
+using SampleTypes
 using Base.Libc: malloc, free
 
 export JackClient
@@ -49,16 +50,17 @@ end
 
 # JackSource and JackSink defs are almost identical, so DRY it out with some
 # metaprogramming magic
-for (T, porttype) in [(:JackSource, :PortIsInput), (:JackSink, :PortIsOutput)]
-    @eval immutable $T
+for (T, Super, porttype) in [(:JackSource, :SampleSource, :PortIsInput),
+                             (:JackSink, :SampleSink, :PortIsOutput)]
+    @eval immutable $T{N, SR} <: $Super{N, SR, JackSample}
         name::ASCIIString
         ptrs::Vector{PortPointers}
         ringcondition::Condition # used to synchronize any in-progress transations
         
-        function $T(client::ClientPtr, name::AbstractString, nchannels::Integer)
+        function $T(client::ClientPtr, name::AbstractString)
             ptrs = PortPointers[]
-            for ch in 1:nchannels
-                suffix = nchannels == 1 ? "" : "_$ch"
+            for ch in 1:N
+                suffix = N == 1 ? "" : "_$ch"
                 ptr = jack_port_register(client, string(name, suffix), JACK_DEFAULT_AUDIO_TYPE, $porttype, 0)
                 if ptr == C_NULL
                     error("Failed to create port for $name$suffix")
@@ -76,6 +78,9 @@ for (T, porttype) in [(:JackSource, :PortIsInput), (:JackSink, :PortIsOutput)]
         end
     end
     
+    @eval $T(client, name, nchannels) =
+        $T{nchannels, Int(jack_get_sample_rate(client))}(client, name)
+        
     @eval function Base.close(s::$T, client::ClientPtr)
         for ptr in s.ptrs
             jack_port_unregister(client, ptr.port)
@@ -134,29 +139,39 @@ type JackClient
         
         # initialize the sources and sinks
         ptridx = 1
-        for sourceargs in sources
-            source = JackSource(clientptr, sourceargs[1], sourceargs[2])
-            push!(client.sources, source)
-            # copy pointers to our flat pointer list that we'll give to the callback
-            for ptr in source.ptrs
-                unsafe_store!(portptrs, ptr.port, ptridx)
-                unsafe_store!(portptrs, ptr.ringbuf, ptridx+1)
-                ptridx += 2
+        try
+            for sourceargs in sources
+                source = JackSource(clientptr, sourceargs[1], sourceargs[2])
+                push!(client.sources, source)
+                # copy pointers to our flat pointer list that we'll give to the callback
+                for ptr in source.ptrs
+                    unsafe_store!(portptrs, ptr.port, ptridx)
+                    unsafe_store!(portptrs, ptr.ringbuf, ptridx+1)
+                    ptridx += 2
+                end
             end
+        catch
+            close(client)
+            rethrow()
         end
         # list of sources is null-terminated
         unsafe_store!(portptrs, C_NULL, ptridx)
         ptridx += 1
         
-        for sinkargs in sinks
-            sink = JackSink(clientptr, sinkargs[1], sinkargs[2])
-            push!(client.sinks, sink)
-            # copy pointers to our flat pointer list that we'll give to the callback
-            for ptr in sink.ptrs
-                unsafe_store!(portptrs, ptr.port, ptridx)
-                unsafe_store!(portptrs, ptr.ringbuf, ptridx+1)
-                ptridx += 2
+        try
+            for sinkargs in sinks
+                sink = JackSink(clientptr, sinkargs[1], sinkargs[2])
+                push!(client.sinks, sink)
+                # copy pointers to our flat pointer list that we'll give to the callback
+                for ptr in sink.ptrs
+                    unsafe_store!(portptrs, ptr.port, ptridx)
+                    unsafe_store!(portptrs, ptr.ringbuf, ptridx+1)
+                    ptridx += 2
+                end
             end
+        catch
+            close(client)
+            rethrow()
         end
         # list of sinks is null-terminated
         unsafe_store!(portptrs, C_NULL, ptridx)
@@ -175,6 +190,7 @@ type JackClient
         # is though
         # process(128, portptrs)
         
+        finalizer(client, close)
         activate(client)
         
         client
@@ -192,22 +208,37 @@ JackClient(name::AbstractString) = JackClient(name, 2, 2)
 JackClient() = JackClient("Julia")
 
 function Base.show(io::IO, client::JackClient)
-    print(io, "JackClient(\"$(client.name)\", $(client.sources), $(client.sinks))")
+    print(io, "JackClient(\"$(client.name)\", [")
+    sources = ASCIIString["(\"$(source.name)\", $(nchannels(source)))" for source in client.sources]
+    sinks = ASCIIString["(\"$(sink.name)\", $(nchannels(sink)))" for sink in client.sinks]
+    print_joined(io, sources, ", ")
+    print(io, "], [")
+    print_joined(io, sinks, ", ")
+    print(io, "])")
 end
 
 function Base.close(client::JackClient)
-    deactivate(client)
-    free(client.portptrs)
-    # TODO: should we clear out the source/sink lists?
-    for source in client.sources
-        close(source, client.ptr)
+    if client.ptr != C_NULL
+        deactivate(client)
     end
-    for sink in client.sinks
-        close(sink, client.ptr)
+    if client.portptrs != C_NULL
+        free(client.portptrs)
+        client.portptrs = C_NULL
     end
-    status = ccall((:jack_client_close, :libjack), Cint, (ClientPtr, ), client.ptr)
-    if status != Int(Success)
-        error("Error closing client $(client.name): $(status_str(status))")
+    for i in length(client.sources):-1:1
+        close(client.sources[i], client.ptr)
+        deleteat!(client.sources, i)
+    end
+    for i in length(client.sinks):-1:1
+        close(client.sinks[i], client.ptr)
+        deleteat!(client.sinks, i)
+    end
+    if client.ptr != C_NULL
+        status = jack_client_close(client.ptr)
+        client.ptr = C_NULL
+        if status != Int(Success)
+            error("Error closing client $(client.name): $(status_str(status))")
+        end
     end
     
     nothing
@@ -233,21 +264,32 @@ function deactivate(client::JackClient)
     nothing
 end
 
+
 # TODO: handle multiple writer situation
-# TODO: handle multichannel
-function Base.write(sink::JackSink, buf::Vector{JackSample})
-    nbytes = Csize_t(length(buf) * sizeof(JackSample))
-    arrptr = Ptr{Cchar}(pointer(buf))
-    n = jack_ringbuffer_write(sink.ptrs[1].ringbuf, arrptr, nbytes)
-    nbytes -= n
-    arrptr += n
-    while nbytes > 0
+# handle writes from a buffer with matching channel count and sample rate. Up/Down
+# mixing and resampling should be the responsibility of SampleTypes.jl
+function Base.write{N, SR}(sink::JackSink{N, SR}, buf::SampleBuf{N, SR, JackSample})
+    # a JackSink{N. SR} should always have N set of pointers, by construction
+    @assert length(sink.ptrs) == N
+    nbytes = Csize_t(nframes(buf) * sizeof(JackSample))
+    bytesleft = ones(Csize_t, N) * nbytes
+    chanptrs = Ptr{JackSample}[channelptr(buf, ch) for ch in 1:N]
+    
+    for (ch, pair) in enumerate(sink.ptrs)
+        n = jack_ringbuffer_write(pair.ringbuf, chanptrs[ch], bytesleft[ch])
+        bytesleft[ch] -= n
+        chanptrs[ch] += n
+    end
+    while any(n -> n > 0, bytesleft)
         # wait to be notified that some space has freed up in the ringbuf
         wait(sink.ringcondition)
-        n = jack_ringbuffer_write(sink.ptrs[1].ringbuf, arrptr, nbytes)
-        nbytes -= n
-        arrptr += n
+        for (ch, pair) in enumerate(sink.ptrs)
+            n = jack_ringbuffer_write(pair.ringbuf, chanptrs[ch], bytesleft[ch])
+            bytesleft[ch] -= n
+            chanptrs[ch] += n
+        end
     end
+    
     # by now we know we've written the whole length of the buffer
     return length(buf)
 end
@@ -300,8 +342,8 @@ function process(nframes, portptrs)
     # handle sinks
     
     while unsafe_load(portptrs, ptridx) != C_NULL
-        sink = unsafe_load(portptrs, 3)
-        ringbuf = unsafe_load(portptrs, 4)
+        sink = unsafe_load(portptrs, ptridx)
+        ringbuf = unsafe_load(portptrs, ptridx + 1)
         ptridx += 2
         
         buf = jack_port_get_buffer(sink, nframes)
@@ -315,7 +357,6 @@ function process(nframes, portptrs)
         
     handle = unsafe_load(portptrs, ptridx)
     
-    # println("triggering function handle $handle form ptridx $ptridx")
     # notify the managebuffers, which will get called with a reference to
     # this client
     ccall(:uv_async_send, Void, (Ptr{Void},), handle)
@@ -339,13 +380,20 @@ function shutdown(arg)
 end
 
 # low-level libjack wrapper functions
+
 jack_client_open(name, options, statusref) =
     ccall((:jack_client_open, :libjack), ClientPtr,
         (Cstring, Cint, Ref{Cint}),
         name, 0, statusref)
+        
+jack_client_close(client) =
+    ccall((:jack_client_close, :libjack), Cint, (ClientPtr, ), client)
             
 jack_get_client_name(client) =
     ccall((:jack_get_client_name, :libjack), Cstring, (ClientPtr, ), client)
+    
+jack_get_sample_rate(client) =
+    ccall((:jack_get_sample_rate, :libjack), NFrames, (ClientPtr, ), client)
         
 jack_set_process_callback(client, callback, userdata) =
     ccall((:jack_set_process_callback, :libjack), Cint,
