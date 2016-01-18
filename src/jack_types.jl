@@ -2,7 +2,7 @@ typealias ClientPtr Ptr{Void}
 typealias PortPtr Ptr{Void}
 typealias CFunPtr Ptr{Void}
 typealias NFrames UInt32
-typealias JackSample Cfloat
+typealias JACKSample Cfloat
 
 const JACK_DEFAULT_AUDIO_TYPE = "32 bit float mono audio"
 
@@ -60,7 +60,7 @@ Base.(:|)(l::PortFlag, r::PortFlag) = UInt(l) | UInt(r)
     # The operation contained an invalid or unsupported option.
     InvalidOption = 0x02,
     # The desired client name was not unique.  With the
-    # JackUseExactName option this situation is fatal.  Otherwise,
+    # JACKUseExactName option this situation is fatal.  Otherwise,
     # the name was modified by appending a dash and a two-digit
     # number in the range "-01" to "-99".  The
     # jack_get_client_name() function will return the exact string

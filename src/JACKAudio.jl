@@ -5,7 +5,7 @@ module JACKAudio
 using SampleTypes
 using Base.Libc: malloc, free
 
-export JackClient
+export JACKClient, sources, sinks
 
 # TODO: Logging is segfaulting when used inside the precompiled callback function
 # using Logging
@@ -20,7 +20,7 @@ const RINGBUF_SAMPLES = 131072
 
 function __init__()
     global const process_cb = cfunction(process, Cint, (NFrames, Ptr{Ptr{Void}}))
-    global const shutdown_cb = cfunction(shutdown, Void, (Ptr{JackClient}, ))
+    global const shutdown_cb = cfunction(shutdown, Void, (Ptr{JACKClient}, ))
     global const info_handler_cb = cfunction(info_handler, Void, (Cstring, ))
     global const error_handler_cb = cfunction(error_handler, Void, (Cstring, ))
     
@@ -48,11 +48,11 @@ immutable PortPointers
     ringbuf::RingBufPtr
 end
 
-# JackSource and JackSink defs are almost identical, so DRY it out with some
+# JACKSource and JACKSink defs are almost identical, so DRY it out with some
 # metaprogramming magic
-for (T, Super, porttype) in [(:JackSource, :SampleSource, :PortIsInput),
-                             (:JackSink, :SampleSink, :PortIsOutput)]
-    @eval immutable $T{N, SR} <: $Super{N, SR, JackSample}
+for (T, Super, porttype) in [(:JACKSource, :SampleSource, :PortIsInput),
+                             (:JACKSink, :SampleSink, :PortIsOutput)]
+    @eval immutable $T{N, SR} <: $Super{N, SR, JACKSample}
         name::ASCIIString
         ptrs::Vector{PortPointers}
         ringcondition::Condition # used to synchronize any in-progress transations
@@ -66,7 +66,7 @@ for (T, Super, porttype) in [(:JackSource, :SampleSource, :PortIsInput),
                     error("Failed to create port for $name$suffix")
                 end
                 
-                bufptr = jack_ringbuffer_create(RINGBUF_SAMPLES * sizeof(JackSample))
+                bufptr = jack_ringbuffer_create(RINGBUF_SAMPLES * sizeof(JACKSample))
                 if bufptr == C_NULL
                     jack_port_unregister(client, ptr)
                     error("Failed to create ringbuffer for $name$suffix")
@@ -93,11 +93,11 @@ for (T, Super, porttype) in [(:JackSource, :SampleSource, :PortIsInput),
     end
 end
 
-type JackClient
+type JACKClient
     name::ASCIIString
     ptr::ClientPtr
-    sources::Vector{JackSource}
-    sinks::Vector{JackSink}
+    sources::Vector{JACKSource}
+    sinks::Vector{JACKSink}
     # this is memory allocated separately with malloc that is used to give the
     # process callback all the pointers it needs for the source/sink ports and
     # ringbuffers
@@ -105,7 +105,7 @@ type JackClient
     callback::Base.SingleAsyncWork
 
     # this constructor takes a list of name, channelcount pairs
-    function JackClient{T1 <: Tuple, T2 <: Tuple}(name::AbstractString,
+    function JACKClient{T1 <: Tuple, T2 <: Tuple}(name::AbstractString,
             sources::Vector{T1}, sinks::Vector{T2})
         status = Ref{Cint}(Failure)
         clientptr = jack_client_open(name, 0, status)
@@ -130,18 +130,18 @@ type JackClient
         portptrs = Ptr{Ptr{Void}}(malloc(nptrs*sizeof(Ptr{Void})))
         if portptrs == C_NULL
             jack_client_close(clientptr)
-            error("Failure allocating memory for Jack client \"$name\"")
+            error("Failure allocating memory for JACK client \"$name\"")
         end
             
         # for now we leave the callback field uninitialized because we need the
         # client reference to build the callback closure
-        client = new(name, clientptr, JackSource[], JackSink[], portptrs)
+        client = new(name, clientptr, JACKSource[], JACKSink[], portptrs)
         
         # initialize the sources and sinks
         ptridx = 1
         try
             for sourceargs in sources
-                source = JackSource(clientptr, sourceargs[1], sourceargs[2])
+                source = JACKSource(clientptr, sourceargs[1], sourceargs[2])
                 push!(client.sources, source)
                 # copy pointers to our flat pointer list that we'll give to the callback
                 for ptr in source.ptrs
@@ -160,7 +160,7 @@ type JackClient
         
         try
             for sinkargs in sinks
-                sink = JackSink(clientptr, sinkargs[1], sinkargs[2])
+                sink = JACKSink(clientptr, sinkargs[1], sinkargs[2])
                 push!(client.sinks, sink)
                 # copy pointers to our flat pointer list that we'll give to the callback
                 for ptr in sink.ptrs
@@ -197,18 +197,22 @@ type JackClient
     end
 end
 
-JackClient(name::AbstractString, sourcecount::Integer, sinkcount::Integer) =
-    JackClient(name, [("In", sourcecount)], [("Out", sinkcount)])
+# TODO: this can probably be cleaned up using default args instead
+JACKClient{T1 <: Tuple, T2 <: Tuple}(sources::Vector{T1}, sinks::Vector{T2}) =
+    JACKClient("Julia", sources, sinks)
+            
+JACKClient(name::AbstractString, sourcecount::Integer, sinkcount::Integer) =
+    JACKClient(name, [("In", sourcecount)], [("Out", sinkcount)])
     
-JackClient(sourcecount::Integer, sinkcount::Integer) =
-    JackClient("Julia", sourcecount, sinkcount)
+JACKClient(sourcecount::Integer, sinkcount::Integer) =
+    JACKClient("Julia", sourcecount, sinkcount)
     
-JackClient(name::AbstractString) = JackClient(name, 2, 2)
+JACKClient(name::AbstractString) = JACKClient(name, 2, 2)
 
-JackClient() = JackClient("Julia")
+JACKClient() = JACKClient("Julia")
 
-function Base.show(io::IO, client::JackClient)
-    print(io, "JackClient(\"$(client.name)\", [")
+function Base.show(io::IO, client::JACKClient)
+    print(io, "JACKClient(\"$(client.name)\", [")
     sources = ASCIIString["(\"$(source.name)\", $(nchannels(source)))" for source in client.sources]
     sinks = ASCIIString["(\"$(sink.name)\", $(nchannels(sink)))" for sink in client.sinks]
     print_joined(io, sources, ", ")
@@ -217,7 +221,7 @@ function Base.show(io::IO, client::JackClient)
     print(io, "])")
 end
 
-function Base.close(client::JackClient)
+function Base.close(client::JACKClient)
     if client.ptr != C_NULL
         deactivate(client)
     end
@@ -244,8 +248,11 @@ function Base.close(client::JackClient)
     nothing
 end
 
+sources(client::JACKClient) = client.sources
+sinks(client::JACKClient) = client.sinks
+
 # this should only get called during construction
-function activate(client::JackClient)
+function activate(client::JACKClient)
     status = ccall((:jack_activate, :libjack), Cint, (ClientPtr, ), client.ptr)
     if status != Int(Success)
         error("Error activating client $(client.name): $(status_str(status))")
@@ -255,7 +262,7 @@ function activate(client::JackClient)
 end
 
 # this should only get called when closing the client
-function deactivate(client::JackClient)
+function deactivate(client::JACKClient)
     status = ccall((:jack_deactivate, :libjack), Cint, (ClientPtr, ), client.ptr)
     if status != Int(Success)
         error("Error deactivating client $(client.name): $(status_str(status))")
@@ -268,12 +275,12 @@ end
 # TODO: handle multiple writer situation
 # handle writes from a buffer with matching channel count and sample rate. Up/Down
 # mixing and resampling should be the responsibility of SampleTypes.jl
-function Base.write{N, SR}(sink::JackSink{N, SR}, buf::SampleBuf{N, SR, JackSample})
-    # a JackSink{N. SR} should always have N set of pointers, by construction
+function Base.write{N, SR}(sink::JACKSink{N, SR}, buf::SampleBuf{N, SR, JACKSample})
+    # a JACKSink{N. SR} should always have N set of pointers, by construction
     @assert length(sink.ptrs) == N
-    nbytes = Csize_t(nframes(buf) * sizeof(JackSample))
+    nbytes = Csize_t(nframes(buf) * sizeof(JACKSample))
     bytesleft = ones(Csize_t, N) * nbytes
-    chanptrs = Ptr{JackSample}[channelptr(buf, ch) for ch in 1:N]
+    chanptrs = Ptr{JACKSample}[channelptr(buf, ch) for ch in 1:N]
     
     for (ch, pair) in enumerate(sink.ptrs)
         n = jack_ringbuffer_write(pair.ringbuf, chanptrs[ch], bytesleft[ch])
@@ -295,10 +302,10 @@ function Base.write{N, SR}(sink::JackSink{N, SR}, buf::SampleBuf{N, SR, JackSamp
 end
 
 # TODO: handle multiple reader situation
-function Base.read!{N, SR}(source::JackSource{N, SR}, buf::SampleBuf{N, SR, JackSample})
-    nbytes = Csize_t(nframes(buf) * sizeof(JackSample))
+function Base.read!{N, SR}(source::JACKSource{N, SR}, buf::SampleBuf{N, SR, JACKSample})
+    nbytes = Csize_t(nframes(buf) * sizeof(JACKSample))
     bytesleft = ones(Csize_t, N) * nbytes
-    chanptrs = Ptr{JackSample}[channelptr(buf, ch) for ch in 1:N]
+    chanptrs = Ptr{JACKSample}[channelptr(buf, ch) for ch in 1:N]
     # note, we could end up reading partial floats here, so things may be
     # wacky if this process gets interrupted
     for (ch, pair) in enumerate(source.ptrs)
@@ -323,7 +330,7 @@ end
 # This gets called from a separate thread, so it is VERY IMPORTANT that it not
 # allocate any memory or JIT compile when it's being run. Here be segfaults.
 function process(nframes, portptrs)
-    nbytes::Csize_t = nframes * sizeof(JackSample)
+    nbytes::Csize_t = nframes * sizeof(JACKSample)
     
     ptridx = 1
     # handle sources
@@ -420,7 +427,7 @@ jack_port_unregister(client, port) =
         client, port)
         
 jack_port_get_buffer(port, nframes) =
-    ccall((:jack_port_get_buffer, :libjack), Ptr{JackSample},
+    ccall((:jack_port_get_buffer, :libjack), Ptr{JACKSample},
         (PortPtr, NFrames),
         port, nframes)
         
