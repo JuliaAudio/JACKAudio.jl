@@ -42,4 +42,4 @@ c = JACKClient("Kompressor", [("Input", 1), ("Sidechain", 1)], [("Output", 1)])
 
 After wiring up the inputs and outputs in QjackCtl, you would end up with this:
 
-![Kompressor in QjackCtl](http://JuliaAudio.github.com/JACKAudio/img/qjackctl-kompressor.png)
+![Kompressor in QjackCtl](http://JuliaAudio.github.io/JACKAudio/img/qjackctl-kompressor.png)
