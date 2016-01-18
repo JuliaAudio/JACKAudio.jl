@@ -16,6 +16,8 @@ In JACK the channels of a `JACKSource` called "out" would be given the names "ou
 
 ## Examples
 
+### Instantiation
+
 The default `JACKClient` is named "Julia" and has one stereo input source and one stereo output sink. You can instantiate it like so:
 
 ```julia
@@ -43,3 +45,21 @@ c = JACKClient("Kompressor", [("Input", 1), ("Sidechain", 1)], [("Output", 1)])
 After wiring up the inputs and outputs in QjackCtl, you would end up with this:
 
 ![Kompressor in QjackCtl](http://juliaaudio.github.io/JACKAudio.jl/img/qjackctl-kompressor.png)
+
+### Reading and Writing
+
+You can access the sources and sinks of a `JACKClient` with the `sources` and `sinks` methods:
+
+```julia
+c = JACKClient()
+source = sources(c)[1]
+sink = sinks(c)[1]
+```
+
+Interfacing with JACK sources and sinks is best done with SampleBufs, from the `SampleTypes` package, which handles type and samplerate conversions, as well as convenience features like indexing by time. For instance, to read 5 seconds of audio and play it back, you can write:
+
+```julia
+buf = read(source, 5s)
+write(sink, buf)
+```
+

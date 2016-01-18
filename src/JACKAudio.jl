@@ -60,16 +60,16 @@ for (T, Super, porttype) in [(:JACKSource, :SampleSource, :PortIsInput),
         function $T(client::ClientPtr, name::AbstractString)
             ptrs = PortPointers[]
             for ch in 1:N
-                suffix = N == 1 ? "" : "_$ch"
-                ptr = jack_port_register(client, string(name, suffix), JACK_DEFAULT_AUDIO_TYPE, $porttype, 0)
-                if ptr == C_NULL
-                    error("Failed to create port for $name$suffix")
+                pname = portname(name, N, ch)
+                ptr = jack_port_register(client, pname, JACK_DEFAULT_AUDIO_TYPE, $porttype, 0)
+                if isnullptr(ptr)
+                    error("Failed to create port for $pname")
                 end
                 
                 bufptr = jack_ringbuffer_create(RINGBUF_SAMPLES * sizeof(JACKSample))
-                if bufptr == C_NULL
+                if isnullptr(bufptr)
                     jack_port_unregister(client, ptr)
-                    error("Failed to create ringbuffer for $name$suffix")
+                    error("Failed to create ringbuffer for $pname")
                 end
                 push!(ptrs, PortPointers(ptr, bufptr))
             end
@@ -92,6 +92,13 @@ for (T, Super, porttype) in [(:JACKSource, :SampleSource, :PortIsInput),
         print(io, $T, "(\"$(s.name)\", $(length(s.ptrs)))")
     end
 end
+    
+"""Generate the name of an individual port. This is what shows up in a JACK port
+list"""
+function portname(name, totalchans, chan)
+    suffix = totalchans == 1 ? "" : "_$chan"
+    string(name, suffix)
+end
 
 type JACKClient
     name::ASCIIString
@@ -105,11 +112,14 @@ type JACKClient
     callback::Base.SingleAsyncWork
 
     # this constructor takes a list of name, channelcount pairs
-    function JACKClient{T1 <: Tuple, T2 <: Tuple}(name::AbstractString,
-            sources::Vector{T1}, sinks::Vector{T2})
+    function JACKClient{T1 <: Tuple, T2 <: Tuple}(
+            name::AbstractString="Julia",
+            sources::Vector{T1}=[("In", 2)],
+            sinks::Vector{T2}=[("Out", 2)];
+            connect=true)
         status = Ref{Cint}(Failure)
         clientptr = jack_client_open(name, 0, status)
-        if clientptr == C_NULL
+        if isnullptr(clientptr)
             error("Failure opening JACK Client: ", status_str(status[]))
         end
         if status[] & ServerStarted
@@ -128,7 +138,7 @@ type JACKClient
         nsinks = sum([p[2] for p in sinks])
         nptrs = 2nsources + 2nsinks + 3
         portptrs = Ptr{Ptr{Void}}(malloc(nptrs*sizeof(Ptr{Void})))
-        if portptrs == C_NULL
+        if isnullptr(portptrs)
             jack_client_close(clientptr)
             error("Failure allocating memory for JACK client \"$name\"")
         end
@@ -193,24 +203,22 @@ type JACKClient
         finalizer(client, close)
         activate(client)
         
+        if connect
+            autoconnect(client)
+        end
+        
         client
     end
 end
 
-# TODO: this can probably be cleaned up using default args instead
-JACKClient{T1 <: Tuple, T2 <: Tuple}(sources::Vector{T1}, sinks::Vector{T2}) =
-    JACKClient("Julia", sources, sinks)
-            
-JACKClient(name::AbstractString, sourcecount::Integer, sinkcount::Integer) =
-    JACKClient(name, [("In", sourcecount)], [("Out", sinkcount)])
+# also allow constructing just by giving channel counts
+JACKClient(name::AbstractString,
+            sourcecount::Integer, sinkcount::Integer; kwargs...) =
+    JACKClient(name, [("In", sourcecount)], [("Out", sinkcount)]; kwargs...)
     
-JACKClient(sourcecount::Integer, sinkcount::Integer) =
-    JACKClient("Julia", sourcecount, sinkcount)
+JACKClient(sourcecount::Integer, sinkcount::Integer; kwargs...) =
+    JACKClient("Julia", [("In", sourcecount)], [("Out", sinkcount)]; kwargs...)
     
-JACKClient(name::AbstractString) = JACKClient(name, 2, 2)
-
-JACKClient() = JACKClient("Julia")
-
 function Base.show(io::IO, client::JACKClient)
     print(io, "JACKClient(\"$(client.name)\", [")
     sources = ASCIIString["(\"$(source.name)\", $(nchannels(source)))" for source in client.sources]
@@ -222,10 +230,10 @@ function Base.show(io::IO, client::JACKClient)
 end
 
 function Base.close(client::JACKClient)
-    if client.ptr != C_NULL
+    if !isnullptr(client.ptr)
         deactivate(client)
     end
-    if client.portptrs != C_NULL
+    if !isnullptr(client.portptrs)
         free(client.portptrs)
         client.portptrs = C_NULL
     end
@@ -237,7 +245,7 @@ function Base.close(client::JACKClient)
         close(client.sinks[i], client.ptr)
         deleteat!(client.sinks, i)
     end
-    if client.ptr != C_NULL
+    if !isnullptr(client.ptr)
         status = jack_client_close(client.ptr)
         client.ptr = C_NULL
         if status != Int(Success)
@@ -250,6 +258,51 @@ end
 
 sources(client::JACKClient) = client.sources
 sinks(client::JACKClient) = client.sinks
+
+# TODO: julia PR to extend Base.isnull rather than using isnullptr
+isnullptr(ptr::Ptr) = Ptr{Void}(ptr) == C_NULL
+isnullptr(ptr::Cstring) = Ptr{Cchar}(ptr) == C_NULL
+
+"""Connect the given client to the physical input/output ports, by just matching
+them up sequentially"""
+function autoconnect(client::JACKClient)
+    # look for physical output ports (the output from the sound card is an input
+    # for us)
+    ports = jack_get_ports(client.ptr, Ptr{Cchar}(C_NULL), Ptr{Cchar}(C_NULL),
+        PortIsPhysical | PortIsOutput)
+    if !isnullptr(ports)
+        idx = 1
+        for stream in client.sources
+            for ch in 1:length(stream.ptrs)
+                isnullptr(unsafe_load(ports, idx)) && break
+                localportname = string(client.name, ":",
+                                       portname(stream.name, length(stream.ptrs), ch))
+                jack_connect(client.ptr, unsafe_load(ports, idx), bytestring(localportname))
+                
+                idx += 1
+            end
+            isnullptr(unsafe_load(ports, idx)) && break
+        end
+        jack_free(ports)
+    end
+    ports = jack_get_ports(client.ptr, Ptr{Cchar}(C_NULL), Ptr{Cchar}(C_NULL),
+        PortIsPhysical | PortIsInput)
+    if !isnullptr(ports)
+        idx = 1
+        for stream in client.sinks
+            for ch in 1:length(stream.ptrs)
+                isnullptr(unsafe_load(ports, idx)) && break
+                localportname = string(client.name, ":",
+                                       portname(stream.name, length(stream.ptrs), ch))
+                jack_connect(client.ptr, bytestring(localportname), unsafe_load(ports, idx))
+                
+                idx += 1
+            end
+            isnullptr(unsafe_load(ports, idx)) && break
+        end
+        jack_free(ports)
+    end
+end
 
 # this should only get called during construction
 function activate(client::JACKClient)
@@ -334,7 +387,7 @@ function process(nframes, portptrs)
     
     ptridx = 1
     # handle sources
-    while unsafe_load(portptrs, ptridx) != C_NULL
+    while !isnullptr(unsafe_load(portptrs, ptridx))
         source = unsafe_load(portptrs, ptridx)
         ringbuf = unsafe_load(portptrs, ptridx + 1)
         ptridx += 2
@@ -353,7 +406,7 @@ function process(nframes, portptrs)
     
     # handle sinks
     
-    while unsafe_load(portptrs, ptridx) != C_NULL
+    while !isnullptr(unsafe_load(portptrs, ptridx))
         sink = unsafe_load(portptrs, ptridx)
         ringbuf = unsafe_load(portptrs, ptridx + 1)
         ptridx += 2
@@ -416,6 +469,17 @@ jack_on_shutdown(client, callback, userdata) =
     ccall((:jack_on_shutdown, :libjack), Cint,
         (ClientPtr, CFunPtr, Ptr{Void}),
         client, callback, userdata)
+        
+jack_get_ports(client, portname, typename, flags) =
+    ccall((:jack_get_ports, :libjack), Ptr{Cstring},
+        (ClientPtr, Cstring, Cstring, Culong),
+        client, portname, typename, flags)
+
+jack_connect(client, src, dest) =
+    ccall((:jack_connect, :libjack), Cint, (ClientPtr, Cstring, Cstring),
+    client, src, dest)
+
+jack_free(ptr) = ccall((:jack_free, :libjack), Void, (Ptr{Void}, ), ptr)
 
 jack_port_register(client, portname, porttype, flags, bufsize) =
     ccall((:jack_port_register, :libjack), PortPtr,
