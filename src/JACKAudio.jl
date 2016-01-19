@@ -304,6 +304,29 @@ function autoconnect(client::JACKClient)
     end
 end
 
+"""Connect the client's sinks to its sources, mostly useful for testing"""
+function selfconnect(client::JACKClient)
+    sinknames = []
+    sourcenames = []
+    for sink in client.sinks
+        N = length(sink.ptrs)
+        for i in 1:N
+            push!(sinknames, string(client.name, ":", portname(sink.name, N, i)))
+        end
+    end
+    for source in client.sources
+        N = length(source.ptrs)
+        for i in 1:N
+            push!(sourcenames, string(client.name, ":", portname(source.name, N, i)))
+        end
+    end
+    
+    for (src, dest) in zip(sinknames, sourcenames)
+        jack_connect(client.ptr, src, dest)
+    end
+
+end
+
 # this should only get called during construction
 function activate(client::JACKClient)
     status = ccall((:jack_activate, :libjack), Cint, (ClientPtr, ), client.ptr)
@@ -359,12 +382,11 @@ function Base.read!{N, SR}(source::JACKSource{N, SR}, buf::SampleBuf{N, SR, JACK
     nbytes = Csize_t(nframes(buf) * sizeof(JACKSample))
     bytesleft = ones(Csize_t, N) * nbytes
     chanptrs = Ptr{JACKSample}[channelptr(buf, ch) for ch in 1:N]
-    # note, we could end up reading partial floats here, so things may be
-    # wacky if this process gets interrupted
-    for (ch, pair) in enumerate(source.ptrs)
-        n = jack_ringbuffer_read(pair.ringbuf, chanptrs[ch], bytesleft[ch])
-        bytesleft[ch] -= n
-        chanptrs[ch] += n
+    # while we're not reading from the buffer it just fills up and then stops,
+    # so we want to clear out whatever was there before and then start reading
+    for pair in source.ptrs
+        jack_ringbuffer_read_advance(pair.ringbuf,
+            jack_ringbuffer_read_space(pair.ringbuf))
     end
     while any(x -> x > 0, bytesleft)
         # wait to be notified that new samples are available in the ringbuf
@@ -392,14 +414,13 @@ function process(nframes, portptrs)
         ringbuf = unsafe_load(portptrs, ptridx + 1)
         ptridx += 2
     
-        if nbytes > jack_ringbuffer_write_space(ringbuf)
-            # we wouldn't have enough space to write and would fill the buffer,
-            # which can cause things to get mis-aligned. Let's make some room
-            jack_ringbuffer_read_advance(ringbuf, nbytes)
+        # only write to the ringbuffer if there's room. Letting it hit all
+        # the way to the end of the buffer loses float-alignment, generating
+        # very loud garbage
+        if nbytes <= jack_ringbuffer_write_space(ringbuf)
+            buf = jack_port_get_buffer(source, nframes)
+            jack_ringbuffer_write(ringbuf, buf, nbytes)
         end
-
-        buf = jack_port_get_buffer(source, nframes)
-        jack_ringbuffer_write(ringbuf, buf, nbytes)
     end
     # skip over the null terminator
     ptridx += 1

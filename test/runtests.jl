@@ -6,6 +6,7 @@ else
     using BaseTestNext
 end
 using JACKAudio
+using SampleTypes
 
 @testset "JACK Tests" begin
     # the process callback is not part of the public API, but we want to run
@@ -106,5 +107,16 @@ println("done recording")
 sleep(5)
 deactivate(client)
 close(client)
+
+c = JACKClient()
+c = JACKClient(connect=false)
+c = JACKClient(4, 4)
+source = sources(c)[1]
+sink = sinks(c)[1]
+
+buf = read(source, 5s)
+write(sink, buf)
+JACKAudio.autoconnect(c)
+JACKAudio.selfconnect(c)
 
 end
