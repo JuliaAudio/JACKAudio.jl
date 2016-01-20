@@ -16,15 +16,75 @@ using SampleTypes
         # note we're caching the client.portptrs access because it seems to
         # cause 16 bytes of allocation
         ptrs = client.portptrs
+        # deactivate so we can run the process callback without the jack
+        # callback interfering
         JACKAudio.deactivate(client)
         # make sure we run it to warm up
         JACKAudio.process(UInt32(256), ptrs)
-        # deactivate so we can run the process callback without the jack
-        # callback interfering
         alloc = @allocated JACKAudio.process(UInt32(256), ptrs)
         JACKAudio.activate(client)
         close(client)
+        sleep(0.5)
         @test alloc == 0
+    end
+    @testset "No-Argument Construction" begin
+        c = JACKClient()
+        @test c.name == "Julia"
+        @test length(sources(c)) == 1
+        @test nchannels(sources(c)[1]) == 2
+        @test length(sinks(c)) == 1
+        @test nchannels(sinks(c)[1]) == 2
+        close(c)
+        sleep(0.5)
+    end
+    @testset "Channel Count Construction" begin
+        c = JACKClient(4, 5)
+        @test c.name == "Julia"
+        @test length(sources(c)) == 1
+        @test nchannels(sources(c)[1]) == 4
+        @test length(sinks(c)) == 1
+        @test nchannels(sinks(c)[1]) == 5
+        close(c)
+        sleep(0.5)
+    end
+    @testset "Name Construction" begin
+        c = JACKClient("TestClient")
+        @test c.name == "TestClient"
+        @test length(sources(c)) == 1
+        @test nchannels(sources(c)[1]) == 2
+        @test length(sinks(c)) == 1
+        @test nchannels(sinks(c)[1]) == 2
+        close(c)
+        sleep(0.5)
+    end
+    @testset "Full Custom Construction" begin
+        c = JACKClient("TestClient", [("In1", 2), ("In2", 3)],
+                                     [("Out1", 1), ("Out2", 2)])
+        @test c.name == "TestClient"
+        @test length(sources(c)) == 2
+        @test nchannels(sources(c)[1]) == 2
+        @test nchannels(sources(c)[2]) == 3
+        @test length(sinks(c)) == 2
+        @test nchannels(sinks(c)[1]) == 1
+        @test nchannels(sinks(c)[2]) == 2
+        close(c)
+        sleep(0.5)
+    end
+    @testset "Read/Write loop" begin
+        sourceclient = JACKClient("Source", 1, 0; connect=false)
+        sinkclient = JACKClient("Sink", 0, 1; connect=false)
+        # TODO use readblock method or blocksize or something
+        # TODO: need a connect method to connect the source and sink
+        buf = SampleBuf(rand(Float32, 32, 1), samplerate(sourceclient))
+        precompile(read, (JACKAudio.JACKSource{1, 48000}, Int))
+        precompile(write, (JACKAudio.JACKSource{1, 48000}, TimeSampleBuf{2, 48000, Float32}))
+        # readtask = @async read(sources(sourceclient)[1], 32)
+        write(sinks(sinkclient)[1], buf)
+        readbuf = read(sources(sourceclient)[1], 32)
+        @test buf == readbuf
+        # @test wait(readtask) == buf
+        close(sourceclient)
+        close(sinkclient)
     end
     # @testset "Opening Client" begin
     #     buf = Array(Float32, 5*48000)

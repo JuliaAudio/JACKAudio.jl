@@ -211,6 +211,9 @@ type JACKClient
     end
 end
 
+SampleTypes.samplerate(client::JACKClient) =
+    Int(jack_get_sample_rate(client.ptr))
+
 # also allow constructing just by giving channel counts
 JACKClient(name::AbstractString,
             sourcecount::Integer, sinkcount::Integer; kwargs...) =
