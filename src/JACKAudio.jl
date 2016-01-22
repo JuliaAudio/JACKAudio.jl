@@ -41,7 +41,7 @@ function info_handler(msg)
     println("libjack: $(bytestring(msg))")
 
     nothing
-:end
+end
 
 immutable PortPointers
     port::PortPtr
@@ -60,6 +60,7 @@ for (T, Super, porttype) in [(:JACKSource, :SampleSource, :PortIsInput),
     @eval immutable $T{N, SR} <: $Super{N, SR, JACKSample}
         # TODO: store the client ptr and use it when closing
         name::ASCIIString
+        client::ClientPtr
         ptrs::Vector{PortPointers}
         ringcondition::Condition # used to synchronize any in-progress transations
         
@@ -82,16 +83,16 @@ for (T, Super, porttype) in [(:JACKSource, :SampleSource, :PortIsInput),
             
             # TODO: switch to a mutable type, add finalizer, null out pointers
             # after closing/freeing them
-            new(name, ptrs, Condition())
+            new(name, client, ptrs, Condition())
         end
     end
     
     @eval $T(client, name, nchannels) =
         $T{nchannels, Int(jack_get_sample_rate(client))}(client, name)
         
-    @eval function Base.close(s::$T, client::ClientPtr)
+    @eval function Base.close(s::$T)
         for ptr in s.ptrs
-            jack_port_unregister(client, ptr.port)
+            jack_port_unregister(s.client, ptr.port)
             jack_ringbuffer_free(ptr.ringbuf)
         end
     end
@@ -259,11 +260,11 @@ function Base.close(client::JACKClient)
         client.portptrs = C_NULL
     end
     for i in length(client.sources):-1:1
-        close(client.sources[i], client.ptr)
+        close(client.sources[i])
         deleteat!(client.sources, i)
     end
     for i in length(client.sinks):-1:1
-        close(client.sinks[i], client.ptr)
+        close(client.sinks[i])
         deleteat!(client.sinks, i)
     end
     if !isnullptr(client.ptr)
