@@ -12,7 +12,7 @@ export JACKClient, sources, sinks
 
 # Logging.configure(level=DEBUG)
 
-include("jack_types.jl")
+include("libjack.jl")
 
 # the ringbuffer size will be this times sizeof(float) rounded up to the nearest
 # power of two
@@ -32,7 +32,7 @@ function __init__()
 end
 
 function error_handler(msg)
-    println("libjack: $(bytestring(msg))")
+    println("libjack: ERROR: $(bytestring(msg))")
 
     nothing
 end
@@ -41,7 +41,7 @@ function info_handler(msg)
     println("libjack: $(bytestring(msg))")
 
     nothing
-end
+:end
 
 immutable PortPointers
     port::PortPtr
@@ -52,7 +52,13 @@ end
 # metaprogramming magic
 for (T, Super, porttype) in [(:JACKSource, :SampleSource, :PortIsInput),
                              (:JACKSink, :SampleSink, :PortIsOutput)]
+    """Represents a multi-channel stream, so it contains multiple jack ports
+    that are considered synchronized, i.e. you read or write to all of them
+    as a group. There can be multiple JACKSources and JACKSinks in a JACKClient,
+    and all the sources and sinks in a client get updated by the same `process`
+    method."""
     @eval immutable $T{N, SR} <: $Super{N, SR, JACKSample}
+        # TODO: store the client ptr and use it when closing
         name::ASCIIString
         ptrs::Vector{PortPointers}
         ringcondition::Condition # used to synchronize any in-progress transations
@@ -74,6 +80,8 @@ for (T, Super, porttype) in [(:JACKSource, :SampleSource, :PortIsInput),
                 push!(ptrs, PortPointers(ptr, bufptr))
             end
             
+            # TODO: switch to a mutable type, add finalizer, null out pointers
+            # after closing/freeing them
             new(name, ptrs, Condition())
         end
     end
@@ -100,6 +108,10 @@ function portname(name, totalchans, chan)
     string(name, suffix)
 end
 
+"""A `JACKClient` represents a connection to the JACK server. It can contain
+multiple `JACKSource`s and `JACKSink`s. It is automatically activated when it is
+constructed, so the sources and sinks are available for reading and writing,
+respectively."""
 type JACKClient
     name::ASCIIString
     ptr::ClientPtr
@@ -116,7 +128,7 @@ type JACKClient
             name::AbstractString="Julia",
             sources::Vector{T1}=[("In", 2)],
             sinks::Vector{T2}=[("Out", 2)];
-            connect=true)
+            connect=true, active=true)
         status = Ref{Cint}(Failure)
         clientptr = jack_client_open(name, 0, status)
         if isnullptr(clientptr)
@@ -137,6 +149,8 @@ type JACKClient
         nsources = sum([p[2] for p in sources])
         nsinks = sum([p[2] for p in sinks])
         nptrs = 2nsources + 2nsinks + 3
+        # TODO: we can switch this malloc and unsafe_store business
+        # to an array we push! to
         portptrs = Ptr{Ptr{Void}}(malloc(nptrs*sizeof(Ptr{Void})))
         if isnullptr(portptrs)
             jack_client_close(clientptr)
@@ -147,6 +161,7 @@ type JACKClient
         # client reference to build the callback closure
         client = new(name, clientptr, JACKSource[], JACKSink[], portptrs)
         
+        # TODO: break out the source/sink addition to separate functions
         # initialize the sources and sinks
         ptridx = 1
         try
@@ -203,8 +218,11 @@ type JACKClient
         finalizer(client, close)
         activate(client)
         
-        if connect
-            autoconnect(client)
+        if active
+            activate(client)
+            if connect
+                autoconnect(client)
+            end
         end
         
         client
@@ -467,83 +485,6 @@ end
 function shutdown(arg)
     nothing
 end
-
-# low-level libjack wrapper functions
-
-jack_client_open(name, options, statusref) =
-    ccall((:jack_client_open, :libjack), ClientPtr,
-        (Cstring, Cint, Ref{Cint}),
-        name, 0, statusref)
-        
-jack_client_close(client) =
-    ccall((:jack_client_close, :libjack), Cint, (ClientPtr, ), client)
-            
-jack_get_client_name(client) =
-    ccall((:jack_get_client_name, :libjack), Cstring, (ClientPtr, ), client)
-    
-jack_get_sample_rate(client) =
-    ccall((:jack_get_sample_rate, :libjack), NFrames, (ClientPtr, ), client)
-        
-jack_set_process_callback(client, callback, userdata) =
-    ccall((:jack_set_process_callback, :libjack), Cint,
-        (ClientPtr, CFunPtr, Ptr{Void}),
-        client, callback, userdata)
-        
-jack_on_shutdown(client, callback, userdata) =
-    ccall((:jack_on_shutdown, :libjack), Cint,
-        (ClientPtr, CFunPtr, Ptr{Void}),
-        client, callback, userdata)
-        
-jack_get_ports(client, portname, typename, flags) =
-    ccall((:jack_get_ports, :libjack), Ptr{Cstring},
-        (ClientPtr, Cstring, Cstring, Culong),
-        client, portname, typename, flags)
-
-jack_connect(client, src, dest) =
-    ccall((:jack_connect, :libjack), Cint, (ClientPtr, Cstring, Cstring),
-    client, src, dest)
-
-jack_free(ptr) = ccall((:jack_free, :libjack), Void, (Ptr{Void}, ), ptr)
-
-jack_port_register(client, portname, porttype, flags, bufsize) =
-    ccall((:jack_port_register, :libjack), PortPtr,
-        (ClientPtr, Cstring, Cstring, Culong, Culong),
-        client, portname, porttype, flags, bufsize)
-
-jack_port_unregister(client, port) =
-    ccall((:jack_port_unregister, :libjack), Cint, (ClientPtr, PortPtr),
-        client, port)
-        
-jack_port_get_buffer(port, nframes) =
-    ccall((:jack_port_get_buffer, :libjack), Ptr{JACKSample},
-        (PortPtr, NFrames),
-        port, nframes)
-        
-jack_ringbuffer_create(bytes) =
-    ccall((:jack_ringbuffer_create, :libjack), Ptr{RingBuf}, (Csize_t, ), bytes)
-
-jack_ringbuffer_free(buf) =
-    ccall((:jack_ringbuffer_free, :libjack), Void, (Ptr{RingBuf}, ), buf)
-
-jack_ringbuffer_read(ringbuf, dest, bytes) =
-    ccall((:jack_ringbuffer_read, :libjack), Csize_t,
-        (Ptr{RingBuf}, Ptr{Void}, Csize_t), ringbuf, dest, bytes)
-
-jack_ringbuffer_read_advance(ringbuf, bytes) =
-    ccall((:jack_ringbuffer_read_advance, :libjack), Void,
-        (Ptr{RingBuf}, Csize_t), ringbuf, bytes)
-
-jack_ringbuffer_read_space(ringbuf) =
-    ccall((:jack_ringbuffer_read_space, :libjack), Csize_t,
-        (Ptr{RingBuf}, ), ringbuf)
-
-jack_ringbuffer_write(ringbuf, src, bytes) =
-    ccall((:jack_ringbuffer_write, :libjack), Csize_t,
-        (Ptr{RingBuf}, Ptr{Void}, Csize_t), ringbuf, src, bytes)
-
-jack_ringbuffer_write_space(ringbuf) =
-    ccall((:jack_ringbuffer_write_space, :libjack), Csize_t,
-        (Ptr{RingBuf}, ), ringbuf)
 
 memset(buf, val, count) = ccall(:memset, Ptr{Void},
     (Ptr{Void}, Cint, Csize_t),

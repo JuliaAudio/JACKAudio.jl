@@ -107,3 +107,79 @@ function status_str(status::Integer)
     end
 end
     
+# low-level libjack wrapper functions
+
+jack_client_open(name, options, statusref) =
+    ccall((:jack_client_open, :libjack), ClientPtr,
+        (Cstring, Cint, Ref{Cint}),
+        name, 0, statusref)
+        
+jack_client_close(client) =
+    ccall((:jack_client_close, :libjack), Cint, (ClientPtr, ), client)
+            
+jack_get_client_name(client) =
+    ccall((:jack_get_client_name, :libjack), Cstring, (ClientPtr, ), client)
+    
+jack_get_sample_rate(client) =
+    ccall((:jack_get_sample_rate, :libjack), NFrames, (ClientPtr, ), client)
+        
+jack_set_process_callback(client, callback, userdata) =
+    ccall((:jack_set_process_callback, :libjack), Cint,
+        (ClientPtr, CFunPtr, Ptr{Void}),
+        client, callback, userdata)
+        
+jack_on_shutdown(client, callback, userdata) =
+    ccall((:jack_on_shutdown, :libjack), Cint,
+        (ClientPtr, CFunPtr, Ptr{Void}),
+        client, callback, userdata)
+        
+jack_get_ports(client, portname, typename, flags) =
+    ccall((:jack_get_ports, :libjack), Ptr{Cstring},
+        (ClientPtr, Cstring, Cstring, Culong),
+        client, portname, typename, flags)
+
+jack_connect(client, src, dest) =
+    ccall((:jack_connect, :libjack), Cint, (ClientPtr, Cstring, Cstring),
+    client, src, dest)
+
+jack_free(ptr) = ccall((:jack_free, :libjack), Void, (Ptr{Void}, ), ptr)
+
+jack_port_register(client, portname, porttype, flags, bufsize) =
+    ccall((:jack_port_register, :libjack), PortPtr,
+        (ClientPtr, Cstring, Cstring, Culong, Culong),
+        client, portname, porttype, flags, bufsize)
+
+jack_port_unregister(client, port) =
+    ccall((:jack_port_unregister, :libjack), Cint, (ClientPtr, PortPtr),
+        client, port)
+        
+jack_port_get_buffer(port, nframes) =
+    ccall((:jack_port_get_buffer, :libjack), Ptr{JACKSample},
+        (PortPtr, NFrames),
+        port, nframes)
+        
+jack_ringbuffer_create(bytes) =
+    ccall((:jack_ringbuffer_create, :libjack), Ptr{RingBuf}, (Csize_t, ), bytes)
+
+jack_ringbuffer_free(buf) =
+    ccall((:jack_ringbuffer_free, :libjack), Void, (Ptr{RingBuf}, ), buf)
+
+jack_ringbuffer_read(ringbuf, dest, bytes) =
+    ccall((:jack_ringbuffer_read, :libjack), Csize_t,
+        (Ptr{RingBuf}, Ptr{Void}, Csize_t), ringbuf, dest, bytes)
+
+jack_ringbuffer_read_advance(ringbuf, bytes) =
+    ccall((:jack_ringbuffer_read_advance, :libjack), Void,
+        (Ptr{RingBuf}, Csize_t), ringbuf, bytes)
+
+jack_ringbuffer_read_space(ringbuf) =
+    ccall((:jack_ringbuffer_read_space, :libjack), Csize_t,
+        (Ptr{RingBuf}, ), ringbuf)
+
+jack_ringbuffer_write(ringbuf, src, bytes) =
+    ccall((:jack_ringbuffer_write, :libjack), Csize_t,
+        (Ptr{RingBuf}, Ptr{Void}, Csize_t), ringbuf, src, bytes)
+
+jack_ringbuffer_write_space(ringbuf) =
+    ccall((:jack_ringbuffer_write_space, :libjack), Csize_t,
+        (Ptr{RingBuf}, ), ringbuf)
