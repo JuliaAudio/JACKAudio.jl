@@ -217,7 +217,6 @@ type JACKClient
         # process(128, portptrs)
         
         finalizer(client, close)
-        activate(client)
         
         if active
             activate(client)
@@ -447,17 +446,33 @@ function process(nframes, portptrs)
     # skip over the null terminator
     ptridx += 1
     
+    sinkidx = ptridx
+    
     # handle sinks
     
+    minbytes = nbytes
+    # we want to find the minimum number of bytes available in any ringbuffer,
+    # so we keep all the channels synchronized
+    while !isnullptr(unsafe_load(portptrs, ptridx))
+        ringbuf = unsafe_load(portptrs, ptridx + 1)
+        ptridx += 2
+        minbytes = min(minbytes, jack_ringbuffer_read_space(ringbuf))
+    end
+    # make sure we only read whole samples
+    minbytes = align(minbytes, sizeof(JACKSample))
+    
+    # rewind back to the beginning of the sinks
+    ptridx = sinkidx
     while !isnullptr(unsafe_load(portptrs, ptridx))
         sink = unsafe_load(portptrs, ptridx)
         ringbuf = unsafe_load(portptrs, ptridx + 1)
         ptridx += 2
         
         buf = jack_port_get_buffer(sink, nframes)
-        bytesread = jack_ringbuffer_read(ringbuf, buf, nbytes)
-        if bytesread != nbytes
-            memset(buf+bytesread, 0, nbytes - bytesread)
+        # we know we're able to read at least minbytes
+        jack_ringbuffer_read(ringbuf, buf, minbytes)
+        if minbytes != nbytes
+            memset(buf+minbytes, 0, nbytes - minbytes)
         end
     end
     # skip over the null terminator
@@ -471,6 +486,9 @@ function process(nframes, portptrs)
     
     Cint(0)
 end
+
+"""Returns the largest x <= value s.t. x has the given alignment (in bytes)"""
+align{T<:Unsigned}(value::T, align::Integer) = value & ~(T(align-1))
 
 # this callback gets called from within the Julia event loop, but is triggered
 # by every `process` call. It bumps any tasks waiting to read or write
