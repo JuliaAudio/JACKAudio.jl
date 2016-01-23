@@ -13,11 +13,13 @@ export JACKClient, sources, sinks
 # Logging.configure(level=DEBUG)
 
 include("libjack.jl")
-include("ringbuf.jl")
 
 # the ringbuffer size will be this times sizeof(float) rounded up to the nearest
 # power of two
 const RINGBUF_SAMPLES = 131072
+# we'll advance the ringbuf read pointer by this many samples whenever we
+# detect an overflow.
+const OVERFLOW_ADVANCE = 8192
 
 function __init__()
     global const process_cb = cfunction(process, Cint, (NFrames, Ptr{Ptr{Void}}))
@@ -44,47 +46,58 @@ function info_handler(msg)
     nothing
 end
 
-immutable PortPointers
-    port::PortPtr
-    ringbuf::RingBufPtr
+"""Represents a single-channel stream to or from JACK. Each port has a JACK
+ringbuffer to get data in and out of the process callback and a julia RingBuffer
+object that can be used for additional buffering. One important difference is
+that if the jack ringbuffer fills up it can't be written to, but the Julia
+RingBuffer maintains the last N samples"""
+immutable JACKPort
+    name::ASCIIString
+    ptr::PortPtr
+    jackbuf::RingBufPtr
+    
+    function JACKPort(client, name, porttype)
+        ptr = jack_port_register(client, name, JACK_DEFAULT_AUDIO_TYPE, porttype, 0)
+        if isnullptr(ptr)
+            error("Failed to create port for $name")
+        end
+        
+        bufptr = jack_ringbuffer_create(RINGBUF_SAMPLES * sizeof(JACKSample))
+        if isnullptr(bufptr)
+            jack_port_unregister(client, ptr)
+            error("Failed to create ringbuffer for $name")
+        end
+        
+        new(name, ptr, bufptr)
+    end
 end
 
 # JACKSource and JACKSink defs are almost identical, so DRY it out with some
 # metaprogramming magic
-for (T, Super, porttype) in [(:JACKSource, :SampleSource, :PortIsInput),
-                             (:JACKSink, :SampleSink, :PortIsOutput)]
+for (T, Super, porttype) in
+        [(:JACKSource, :SampleSource, :PortIsInput),
+         (:JACKSink, :SampleSink, :PortIsOutput)]
     """Represents a multi-channel stream, so it contains multiple jack ports
     that are considered synchronized, i.e. you read or write to all of them
     as a group. There can be multiple JACKSources and JACKSinks in a JACKClient,
     and all the sources and sinks in a client get updated by the same `process`
     method."""
     @eval immutable $T{N, SR} <: $Super{N, SR, JACKSample}
-        # TODO: store the client ptr and use it when closing
         name::ASCIIString
         client::ClientPtr
-        ptrs::Vector{PortPointers}
+        ports::Vector{JACKPort}
         ringcondition::Condition # used to synchronize any in-progress transations
         
         function $T(client::ClientPtr, name::AbstractString)
-            ptrs = PortPointers[]
+            ports = JACKPort[]
             for ch in 1:N
                 pname = portname(name, N, ch)
-                ptr = jack_port_register(client, pname, JACK_DEFAULT_AUDIO_TYPE, $porttype, 0)
-                if isnullptr(ptr)
-                    error("Failed to create port for $pname")
-                end
-                
-                bufptr = jack_ringbuffer_create(RINGBUF_SAMPLES * sizeof(JACKSample))
-                if isnullptr(bufptr)
-                    jack_port_unregister(client, ptr)
-                    error("Failed to create ringbuffer for $pname")
-                end
-                push!(ptrs, PortPointers(ptr, bufptr))
+                push!(ports, JACKPort(client, pname, $porttype))
             end
             
             # TODO: switch to a mutable type, add finalizer, null out pointers
             # after closing/freeing them
-            new(name, client, ptrs, Condition())
+            new(name, client, ports, Condition())
         end
     end
     
@@ -92,14 +105,14 @@ for (T, Super, porttype) in [(:JACKSource, :SampleSource, :PortIsInput),
         $T{nchannels, Int(jack_get_sample_rate(client))}(client, name)
         
     @eval function Base.close(s::$T)
-        for ptr in s.ptrs
-            jack_port_unregister(s.client, ptr.port)
-            jack_ringbuffer_free(ptr.ringbuf)
+        for port in s.ports
+            jack_port_unregister(s.client, port.ptr)
+            jack_ringbuffer_free(port.jackbuf)
         end
     end
     
     @eval function Base.show(io::IO, s::$T)
-        print(io, $T, "(\"$(s.name)\", $(length(s.ptrs)))")
+        print(io, $T, "(\"$(s.name)\", $(length(s.ports)))")
     end
 end
     
@@ -171,9 +184,9 @@ type JACKClient
                 source = JACKSource(clientptr, sourceargs[1], sourceargs[2])
                 push!(client.sources, source)
                 # copy pointers to our flat pointer list that we'll give to the callback
-                for ptr in source.ptrs
-                    unsafe_store!(portptrs, ptr.port, ptridx)
-                    unsafe_store!(portptrs, ptr.ringbuf, ptridx+1)
+                for port in source.ports
+                    unsafe_store!(portptrs, port.ptr, ptridx)
+                    unsafe_store!(portptrs, port.jackbuf, ptridx+1)
                     ptridx += 2
                 end
             end
@@ -190,9 +203,9 @@ type JACKClient
                 sink = JACKSink(clientptr, sinkargs[1], sinkargs[2])
                 push!(client.sinks, sink)
                 # copy pointers to our flat pointer list that we'll give to the callback
-                for ptr in sink.ptrs
-                    unsafe_store!(portptrs, ptr.port, ptridx)
-                    unsafe_store!(portptrs, ptr.ringbuf, ptridx+1)
+                for port in sink.ports
+                    unsafe_store!(portptrs, port.ptr, ptridx)
+                    unsafe_store!(portptrs, port.jackbuf, ptridx+1)
                     ptridx += 2
                 end
             end
@@ -295,10 +308,10 @@ function autoconnect(client::JACKClient)
     if !isnullptr(ports)
         idx = 1
         for stream in client.sources
-            for ch in 1:length(stream.ptrs)
+            for ch in 1:length(stream.ports)
                 isnullptr(unsafe_load(ports, idx)) && break
                 localportname = string(client.name, ":",
-                                       portname(stream.name, length(stream.ptrs), ch))
+                                       portname(stream.name, length(stream.ports), ch))
                 jack_connect(client.ptr, unsafe_load(ports, idx), bytestring(localportname))
                 
                 idx += 1
@@ -312,10 +325,10 @@ function autoconnect(client::JACKClient)
     if !isnullptr(ports)
         idx = 1
         for stream in client.sinks
-            for ch in 1:length(stream.ptrs)
+            for ch in 1:length(stream.ports)
                 isnullptr(unsafe_load(ports, idx)) && break
                 localportname = string(client.name, ":",
-                                       portname(stream.name, length(stream.ptrs), ch))
+                                       portname(stream.name, length(stream.ports), ch))
                 jack_connect(client.ptr, bytestring(localportname), unsafe_load(ports, idx))
                 
                 idx += 1
@@ -331,13 +344,13 @@ function selfconnect(client::JACKClient)
     sinknames = []
     sourcenames = []
     for sink in client.sinks
-        N = length(sink.ptrs)
+        N = length(sink.ports)
         for i in 1:N
             push!(sinknames, string(client.name, ":", portname(sink.name, N, i)))
         end
     end
     for source in client.sources
-        N = length(source.ptrs)
+        N = length(source.ports)
         for i in 1:N
             push!(sourcenames, string(client.name, ":", portname(source.name, N, i)))
         end
@@ -375,21 +388,21 @@ end
 # mixing and resampling should be the responsibility of SampleTypes.jl
 function Base.write{N, SR}(sink::JACKSink{N, SR}, buf::SampleBuf{N, SR, JACKSample})
     # a JACKSink{N. SR} should always have N set of pointers, by construction
-    @assert length(sink.ptrs) == N
+    @assert length(sink.ports) == N
     nbytes = Csize_t(nframes(buf) * sizeof(JACKSample))
     bytesleft = ones(Csize_t, N) * nbytes
     chanptrs = Ptr{JACKSample}[channelptr(buf, ch) for ch in 1:N]
     
-    for (ch, pair) in enumerate(sink.ptrs)
-        n = jack_ringbuffer_write(pair.ringbuf, chanptrs[ch], bytesleft[ch])
+    for (ch, port) in enumerate(sink.ports)
+        n = jack_ringbuffer_write(port.jackbuf, chanptrs[ch], bytesleft[ch])
         bytesleft[ch] -= n
         chanptrs[ch] += n
     end
     while any(x -> x > 0, bytesleft)
         # wait to be notified that some space has freed up in the ringbuf
         wait(sink.ringcondition)
-        for (ch, pair) in enumerate(sink.ptrs)
-            n = jack_ringbuffer_write(pair.ringbuf, chanptrs[ch], bytesleft[ch])
+        for (ch, port) in enumerate(sink.ports)
+            n = jack_ringbuffer_write(port.jackbuf, chanptrs[ch], bytesleft[ch])
             bytesleft[ch] -= n
             chanptrs[ch] += n
         end
@@ -399,26 +412,55 @@ function Base.write{N, SR}(sink::JACKSink{N, SR}, buf::SampleBuf{N, SR, JACKSamp
     nframes(buf)
 end
 
+function overflowed(source::JACKSource)
+    for port in source.ports
+        if jack_ringbuffer_write_space(port.jackbuf) < sizeof(JACKSample)
+            return true
+        end
+    end
+    
+    false
+end
+
+function min_read_space(source::JACKSource)
+    minspace = typemax(Csize_t)
+    for port in source.ports
+        minspace = min(minspace, jack_ringbuffer_read_space(port.jackbuf))
+    end
+    
+    minspace
+end
+
+"""advances the read pointer of the ring buffer without actually reading the
+data"""
+function ringbuf_read_advance(source::JACKSource, amount)
+    for port in source.ports
+        jack_ringbuffer_read_advance(port.jackbuf, amount)
+    end
+end
+
 # TODO: handle multiple reader situation
 function Base.read!{N, SR}(source::JACKSource{N, SR}, buf::SampleBuf{N, SR, JACKSample})
     bytesleft = Csize_t(nframes(buf) * sizeof(JACKSample))
     chanptrs = Ptr{JACKSample}[channelptr(buf, ch) for ch in 1:N]
-    # while we're not reading from the buffer it just fills up and then stops,
-    # so we want to clear out whatever was there before and then start reading
-    for pair in source.ptrs
-        jack_ringbuffer_read_advance(pair.ringbuf,
-            jack_ringbuffer_read_space(pair.ringbuf))
+    
+    # do the first read immediately
+    minspace = min_read_space(source)
+    nbytes = align(min(minspace, bytesleft), sizeof(JACKSample))
+    for (ch, port) in enumerate(source.ports)
+        jack_ringbuffer_read(port.jackbuf, chanptrs[ch], nbytes)
+        chanptrs[ch] += nbytes
     end
+    bytesleft -= nbytes
+    
+    # now we wait to be notified that there's new data to read
     while bytesleft > 0
-        nbytes = bytesleft
-        for pair in source.ptrs
-            nbytes = min(nbytes, jack_ringbuffer_read_space(pair.ringbuf))
-        end
-        nbytes = align(nbytes, sizeof(JACKSample))
         # wait to be notified that new samples are available in the ringbuf
         wait(source.ringcondition)
-        for (ch, pair) in enumerate(source.ptrs)
-            jack_ringbuffer_read(pair.ringbuf, chanptrs[ch], nbytes)
+        minspace = min_read_space(source)
+        nbytes = align(min(minspace, bytesleft), sizeof(JACKSample))
+        for (ch, port) in enumerate(source.ports)
+            jack_ringbuffer_read(port.jackbuf, chanptrs[ch], nbytes)
             chanptrs[ch] += nbytes
         end
         bytesleft -= nbytes
@@ -435,18 +477,28 @@ function process(nframes, portptrs)
     
     ptridx = 1
     # handle sources
+    
+    # we want to find the minimum amount of space in any ringbuffer, so we keep
+    # all the channels synchronized even if a channel is overflowing
+    minbytes = nbytes
+    while !isnullptr(unsafe_load(portptrs, ptridx))
+        ringbuf = unsafe_load(portptrs, ptridx + 1)
+        ptridx += 2
+        minbytes = min(minbytes, jack_ringbuffer_write_space(ringbuf))
+    end
+    # make sure we only write whole samples
+    minbytes = align(minbytes, sizeof(JACKSample))
+    
+    # rewind back to the beginning for the actual writes
+    ptridx = 1
+    
     while !isnullptr(unsafe_load(portptrs, ptridx))
         source = unsafe_load(portptrs, ptridx)
         ringbuf = unsafe_load(portptrs, ptridx + 1)
         ptridx += 2
     
-        # only write to the ringbuffer if there's room. Letting it hit all
-        # the way to the end of the buffer loses float-alignment, generating
-        # very loud garbage
-        if nbytes <= jack_ringbuffer_write_space(ringbuf)
-            buf = jack_port_get_buffer(source, nframes)
-            jack_ringbuffer_write(ringbuf, buf, nbytes)
-        end
+        buf = jack_port_get_buffer(source, nframes)
+        jack_ringbuffer_write(ringbuf, buf, minbytes)
     end
     # skip over the null terminator
     ptridx += 1
@@ -499,8 +551,14 @@ align{T<:Unsigned}(value::T, align::Integer) = value & ~(T(align-1))
 # by every `process` call. It bumps any tasks waiting to read or write
 function managebuffers(client)
     for source in client.sources
+        # if we've overflowed, advance the read head
+        if overflowed(source)
+            advance = min(OVERFLOW_ADVANCE, min_read_space(source))
+            ringbuf_read_advance(source, advance)
+        end
         notify(source.ringcondition)
     end
+    
     for sink in client.sinks
         notify(sink.ringcondition)
     end
