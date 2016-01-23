@@ -13,6 +13,7 @@ export JACKClient, sources, sinks
 # Logging.configure(level=DEBUG)
 
 include("libjack.jl")
+include("ringbuf.jl")
 
 # the ringbuffer size will be this times sizeof(float) rounded up to the nearest
 # power of two
@@ -400,8 +401,7 @@ end
 
 # TODO: handle multiple reader situation
 function Base.read!{N, SR}(source::JACKSource{N, SR}, buf::SampleBuf{N, SR, JACKSample})
-    nbytes = Csize_t(nframes(buf) * sizeof(JACKSample))
-    bytesleft = ones(Csize_t, N) * nbytes
+    bytesleft = Csize_t(nframes(buf) * sizeof(JACKSample))
     chanptrs = Ptr{JACKSample}[channelptr(buf, ch) for ch in 1:N]
     # while we're not reading from the buffer it just fills up and then stops,
     # so we want to clear out whatever was there before and then start reading
@@ -409,14 +409,19 @@ function Base.read!{N, SR}(source::JACKSource{N, SR}, buf::SampleBuf{N, SR, JACK
         jack_ringbuffer_read_advance(pair.ringbuf,
             jack_ringbuffer_read_space(pair.ringbuf))
     end
-    while any(x -> x > 0, bytesleft)
+    while bytesleft > 0
+        nbytes = bytesleft
+        for pair in source.ptrs
+            nbytes = min(nbytes, jack_ringbuffer_read_space(pair.ringbuf))
+        end
+        nbytes = align(nbytes, sizeof(JACKSample))
         # wait to be notified that new samples are available in the ringbuf
         wait(source.ringcondition)
         for (ch, pair) in enumerate(source.ptrs)
-            n = jack_ringbuffer_read(pair.ringbuf, chanptrs[ch], bytesleft[ch])
-            bytesleft[ch] -= n
-            chanptrs[ch] += n
+            jack_ringbuffer_read(pair.ringbuf, chanptrs[ch], nbytes)
+            chanptrs[ch] += nbytes
         end
+        bytesleft -= nbytes
     end
     
     # by now we know we've read the whole length of the buffer
