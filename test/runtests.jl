@@ -12,19 +12,14 @@ using SampleTypes
     # the process callback is not part of the public API, but we want to run
     # some tests on it anyways
     @testset "Process Callback" begin
-        client = JACKClient()
+        client = JACKClient(active=false)
         # note we're caching the client.portptrs access because it seems to
         # cause 16 bytes of allocation
         ptrs = client.portptrs
-        # deactivate so we can run the process callback without the jack
-        # callback interfering
-        JACKAudio.deactivate(client)
         # make sure we run it to warm up
         JACKAudio.process(UInt32(256), ptrs)
         alloc = @allocated JACKAudio.process(UInt32(256), ptrs)
-        JACKAudio.activate(client)
         close(client)
-        sleep(0.5)
         @test alloc == 0
     end
     @testset "No-Argument Construction" begin
@@ -35,7 +30,6 @@ using SampleTypes
         @test length(sinks(c)) == 1
         @test nchannels(sinks(c)[1]) == 2
         close(c)
-        sleep(0.5)
     end
     @testset "Channel Count Construction" begin
         c = JACKClient(4, 5)
@@ -45,7 +39,6 @@ using SampleTypes
         @test length(sinks(c)) == 1
         @test nchannels(sinks(c)[1]) == 5
         close(c)
-        sleep(0.5)
     end
     @testset "Name Construction" begin
         c = JACKClient("TestClient")
@@ -55,7 +48,6 @@ using SampleTypes
         @test length(sinks(c)) == 1
         @test nchannels(sinks(c)[1]) == 2
         close(c)
-        sleep(0.5)
     end
     @testset "Full Custom Construction" begin
         c = JACKClient("TestClient", [("In1", 2), ("In2", 3)],
@@ -68,18 +60,33 @@ using SampleTypes
         @test nchannels(sinks(c)[1]) == 1
         @test nchannels(sinks(c)[2]) == 2
         close(c)
-        sleep(0.5)
     end
+    # this test is an example of how finicky it is to do synchronized audio IO
+    # using a stream-based read/write API.
     @testset "Read/Write loop" begin
         sourceclient = JACKClient("Source", 1, 0; connect=false)
         sinkclient = JACKClient("Sink", 0, 1; connect=false)
+        sink = sinks(sinkclient)[1]
+        source = sources(sourceclient)[1]
+        # connect them in JACK
+        connect(sink, source)
         # TODO use readblock method or blocksize or something
         # TODO: need a connect method to connect the source and sink
         buf = SampleBuf(rand(Float32, 32, 1), samplerate(sourceclient))
         precompile(read, (JACKAudio.JACKSource{1, 48000}, Int))
         precompile(write, (JACKAudio.JACKSource{1, 48000}, TimeSampleBuf{2, 48000, Float32}))
-        # readtask = @async read(sources(sourceclient)[1], 32)
+        # clear out any audio we've accumulated in the source buffer
+        seekavailable(source)
+        # read (we know this will block). This is to synchronize so we know we're
+        # running the test at the beginning of the block. It's still not 100%
+        # deterministic but hopefully this makes it pass most of the time.
+        read(source, 1)
+        # skip the rest of the block we received
+        seekavailable(source)
         write(sinks(sinkclient)[1], buf)
+        # this should block now as well because there weren't any more frames
+        # to read. In the next process callback JACK should read from the sink
+        # and write to the source, sticking the data in readbuf
         readbuf = read(sources(sourceclient)[1], 32)
         @test buf == readbuf
         # @test wait(readtask) == buf

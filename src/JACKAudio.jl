@@ -85,10 +85,11 @@ for (T, Super, porttype) in
     @eval immutable $T{N, SR} <: $Super{N, SR, JACKSample}
         name::ASCIIString
         client::ClientPtr
+        clientname::ASCIIString
         ports::Vector{JACKPort}
         ringcondition::Condition # used to synchronize any in-progress transations
         
-        function $T(client::ClientPtr, name::AbstractString)
+        function $T(client::ClientPtr, clientname, name)
             ports = JACKPort[]
             for ch in 1:N
                 pname = portname(name, N, ch)
@@ -97,12 +98,12 @@ for (T, Super, porttype) in
             
             # TODO: switch to a mutable type, add finalizer, null out pointers
             # after closing/freeing them
-            new(name, client, ports, Condition())
+            new(name, client, clientname, ports, Condition())
         end
     end
     
-    @eval $T(client, name, nchannels) =
-        $T{nchannels, Int(jack_get_sample_rate(client))}(client, name)
+    @eval $T(client, clientname, name, nchannels) =
+        $T{nchannels, Int(jack_get_sample_rate(client))}(client, clientname, name)
         
     @eval function Base.close(s::$T)
         for port in s.ports
@@ -181,7 +182,7 @@ type JACKClient
         ptridx = 1
         try
             for sourceargs in sources
-                source = JACKSource(clientptr, sourceargs[1], sourceargs[2])
+                source = JACKSource(clientptr, name, sourceargs[1], sourceargs[2])
                 push!(client.sources, source)
                 # copy pointers to our flat pointer list that we'll give to the callback
                 for port in source.ports
@@ -200,7 +201,7 @@ type JACKClient
         
         try
             for sinkargs in sinks
-                sink = JACKSink(clientptr, sinkargs[1], sinkargs[2])
+                sink = JACKSink(clientptr, name, sinkargs[1], sinkargs[2])
                 push!(client.sinks, sink)
                 # copy pointers to our flat pointer list that we'll give to the callback
                 for port in sink.ports
@@ -362,6 +363,14 @@ function selfconnect(client::JACKClient)
 
 end
 
+function Base.connect(sink::JACKSink, source::JACKSource)
+    for (sinkport, sourceport) in zip(sink.ports, source.ports)
+        sinkportname = string(sink.clientname, ":", sinkport.name)
+        sourceportname = string(source.clientname, ":", sourceport.name)
+        jack_connect(sink.client, sinkportname, sourceportname)
+    end
+end
+
 # this should only get called during construction
 function activate(client::JACKClient)
     status = ccall((:jack_activate, :libjack), Cint, (ClientPtr, ), client.ptr)
@@ -446,7 +455,7 @@ function Base.read!{N, SR}(source::JACKSource{N, SR}, buf::SampleBuf{N, SR, JACK
     
     # do the first read immediately
     minspace = min_read_space(source)
-    nbytes = align(min(minspace, bytesleft), sizeof(JACKSample))
+    nbytes = sampalign(min(minspace, bytesleft))
     for (ch, port) in enumerate(source.ports)
         jack_ringbuffer_read(port.jackbuf, chanptrs[ch], nbytes)
         chanptrs[ch] += nbytes
@@ -458,7 +467,7 @@ function Base.read!{N, SR}(source::JACKSource{N, SR}, buf::SampleBuf{N, SR, JACK
         # wait to be notified that new samples are available in the ringbuf
         wait(source.ringcondition)
         minspace = min_read_space(source)
-        nbytes = align(min(minspace, bytesleft), sizeof(JACKSample))
+        nbytes = sampalign(min(minspace, bytesleft))
         for (ch, port) in enumerate(source.ports)
             jack_ringbuffer_read(port.jackbuf, chanptrs[ch], nbytes)
             chanptrs[ch] += nbytes
@@ -469,6 +478,13 @@ function Base.read!{N, SR}(source::JACKSource{N, SR}, buf::SampleBuf{N, SR, JACK
     # by now we know we've read the whole length of the buffer
     nframes(buf)
 end
+
+function seekavailable(source::JACKSource)
+    minspace = sampalign(min_read_space(source))
+    jack_ringbuffer_read_advance(minspace)
+end
+
+navailable(source::JACKSource) = sampalign(min_read_space(source))
 
 # This gets called from a separate thread, so it is VERY IMPORTANT that it not
 # allocate any memory or JIT compile when it's being run. Here be segfaults.
@@ -487,7 +503,7 @@ function process(nframes, portptrs)
         minbytes = min(minbytes, jack_ringbuffer_write_space(ringbuf))
     end
     # make sure we only write whole samples
-    minbytes = align(minbytes, sizeof(JACKSample))
+    minbytes = sampalign(minbytes)
     
     # rewind back to the beginning for the actual writes
     ptridx = 1
@@ -516,7 +532,7 @@ function process(nframes, portptrs)
         minbytes = min(minbytes, jack_ringbuffer_read_space(ringbuf))
     end
     # make sure we only read whole samples
-    minbytes = align(minbytes, sizeof(JACKSample))
+    minbytes = sampalign(minbytes)
     
     # rewind back to the beginning of the sinks
     ptridx = sinkidx
@@ -545,7 +561,8 @@ function process(nframes, portptrs)
 end
 
 """Returns the largest x <= value s.t. x has the given alignment (in bytes)"""
-align{T<:Unsigned}(value::T, align::Integer) = value & ~(T(align-1))
+align{T<:Unsigned}(value::T, alignment::Integer) = value & ~(T(alignment-1))
+sampalign(value) = align(value, sizeof(JACKSample))
 
 # this callback gets called from within the Julia event loop, but is triggered
 # by every `process` call. It bumps any tasks waiting to read or write
