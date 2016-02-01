@@ -8,8 +8,6 @@ end
 using JACKAudio
 using SampleTypes
 
-import JACKAudio.RingBuffer
-
 @testset "JACK Tests" begin
     # the process callback is not part of the public API, but we want to run
     # some tests on it anyways
