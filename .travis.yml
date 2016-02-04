@@ -3,18 +3,27 @@ language: julia
 os:
   - linux
   # - osx
-julia:
-  - 0.4
-  - nightly
 notifications:
   email: false
 matrix:
   include:
-    - addons:
+    - julia: 0.4
+      addons:
         apt:
           packages:
             - jackd1
-    - addons:
+    - julia: 0.4
+      addons:
+        apt:
+          packages:
+            - jackd2
+    - julia: nightly
+      addons:
+        apt:
+          packages:
+            - jackd1
+    - julia: nightly
+      addons:
         apt:
           packages:
             - jackd2
