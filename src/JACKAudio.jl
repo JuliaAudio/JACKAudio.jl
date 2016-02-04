@@ -5,7 +5,7 @@ module JACKAudio
 using SampleTypes
 using Base.Libc: malloc, free
 
-export JACKClient, sources, sinks
+export JACKClient, sources, sinks, seekavailable
 
 # TODO: Logging is segfaulting when used inside the precompiled callback function
 # using Logging
@@ -480,11 +480,16 @@ function Base.read!{N, SR}(source::JACKSource{N, SR}, buf::SampleBuf{N, SR, JACK
 end
 
 function seekavailable(source::JACKSource)
-    minspace = sampalign(min_read_space(source))
-    jack_ringbuffer_read_advance(minspace)
+    minspace = navailable(source)
+    ringbuf_read_advance(source, minspace)
 end
 
 navailable(source::JACKSource) = sampalign(min_read_space(source))
+
+function Base.wait(source::JACKSource)
+    navailable(source) > 0 && return nothing
+    wait(source.ringcondition)
+end
 
 # This gets called from a separate thread, so it is VERY IMPORTANT that it not
 # allocate any memory or JIT compile when it's being run. Here be segfaults.

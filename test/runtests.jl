@@ -73,23 +73,24 @@ using SampleTypes
         # TODO use readblock method or blocksize or something
         # TODO: need a connect method to connect the source and sink
         buf = SampleBuf(rand(Float32, 32, 1), samplerate(sourceclient))
-        precompile(read, (JACKAudio.JACKSource{1, 48000}, Int))
-        precompile(write, (JACKAudio.JACKSource{1, 48000}, TimeSampleBuf{2, 48000, Float32}))
+        # call the read and write functions to make sure they're compiled before
+        # we actually run the test
+        write(sink, buf)
+        read(source, 32)
         # clear out any audio we've accumulated in the source buffer
         seekavailable(source)
-        # read (we know this will block). This is to synchronize so we know we're
-        # running the test at the beginning of the block. It's still not 100%
-        # deterministic but hopefully this makes it pass most of the time.
-        read(source, 1)
-        # skip the rest of the block we received
+        # synchronize so we know we're running the test at the beginning of the
+        # block. It's still not 100% deterministic but hopefully this makes it
+        # pass most of the time.
+        wait(source)
+        # skip the block we received
         seekavailable(source)
-        write(sinks(sinkclient)[1], buf)
+        write(sink, buf)
         # this should block now as well because there weren't any more frames
         # to read. In the next process callback JACK should read from the sink
         # and write to the source, sticking the data in readbuf
-        readbuf = read(sources(sourceclient)[1], 32)
+        readbuf = read(source, 32)
         @test buf == readbuf
-        # @test wait(readtask) == buf
         close(sourceclient)
         close(sinkclient)
     end
