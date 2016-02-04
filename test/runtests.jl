@@ -17,6 +17,7 @@ end
 @testset "JACK Tests" begin
     # the process callback is not part of the public API, but we want to run
     # some tests on it anyways. This seems to segfault on jack1
+    println("test 1")
     jackd == 2 && @testset "Process Callback" begin
         client = JACKClient(active=false)
         # note we're caching the client.portptrs access because it seems to
@@ -28,6 +29,7 @@ end
         close(client)
         @test alloc == 0
     end
+    println("test 2")
     @testset "No-Argument Construction" begin
         c = JACKClient()
         @test c.name == "Julia"
@@ -37,6 +39,7 @@ end
         @test nchannels(sinks(c)[1]) == 2
         close(c)
     end
+    println("test 3")
     @testset "Channel Count Construction" begin
         c = JACKClient(4, 5)
         @test c.name == "Julia"
@@ -46,6 +49,7 @@ end
         @test nchannels(sinks(c)[1]) == 5
         close(c)
     end
+    println("test 4")
     @testset "Name Construction" begin
         c = JACKClient("TestClient")
         @test c.name == "TestClient"
@@ -55,6 +59,7 @@ end
         @test nchannels(sinks(c)[1]) == 2
         close(c)
     end
+    println("test 5")
     @testset "Full Custom Construction" begin
         c = JACKClient("TestClient", [("In1", 2), ("In2", 3)],
                                      [("Out1", 1), ("Out2", 2)])
@@ -67,6 +72,7 @@ end
         @test nchannels(sinks(c)[2]) == 2
         close(c)
     end
+    println("test 6")
     # this test is an example of how finicky it is to do synchronized audio IO
     # using a stream-based read/write API.
     @testset "Read/Write loop" begin
