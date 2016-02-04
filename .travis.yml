@@ -1,28 +1,32 @@
 # Documentation: http://docs.travis-ci.com/user/languages/julia/
 language: julia
-os:
-  - linux
+# os:
+#   - linux
   # - osx
 notifications:
   email: false
 matrix:
   include:
     - julia: 0.4
+      os: linux
       addons:
         apt:
           packages:
             - jackd1
     - julia: 0.4
+      os: linux
       addons:
         apt:
           packages:
             - jackd2
     - julia: nightly
+      os: linux
       addons:
         apt:
           packages:
             - jackd1
     - julia: nightly
+      os: linux
       addons:
         apt:
           packages:
