@@ -1,8 +1,5 @@
 # Documentation: http://docs.travis-ci.com/user/languages/julia/
 language: julia
-env:
-  - JACK_PKG=jackd1
-  - JACK_PKG=jackd2
 os:
   - linux
   # - osx
@@ -11,10 +8,16 @@ julia:
   - nightly
 notifications:
   email: false
-addons:
-  apt:
-    packages:
-      - $JACK_PKG
+matrix:
+  include:
+    - addons:
+        apt:
+          packages:
+            - jackd1
+    - addons:
+        apt:
+          packages:
+            - jackd2
 script:
  - jackd -ddummy -r48000 -p512 &
  # SampleTypes is unregistered so clone it for testing
