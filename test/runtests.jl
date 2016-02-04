@@ -8,10 +8,16 @@ end
 using JACKAudio
 using SampleTypes
 
+if "JACKD" in keys(ENV) && ENV["JACKD"] == "1"
+    const jackd=1
+else
+    const jackd=2
+end
+
 @testset "JACK Tests" begin
     # the process callback is not part of the public API, but we want to run
-    # some tests on it anyways
-    @testset "Process Callback" begin
+    # some tests on it anyways. This seems to segfault on jack1
+    jackd == 2 && @testset "Process Callback" begin
         client = JACKClient(active=false)
         # note we're caching the client.portptrs access because it seems to
         # cause 16 bytes of allocation

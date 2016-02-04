@@ -9,24 +9,32 @@ matrix:
   include:
     - julia: 0.4
       os: linux
+      env:
+        - JACKD=1
       addons:
         apt:
           packages:
             - jackd1
     - julia: 0.4
       os: linux
+      env:
+        - JACKD=2
       addons:
         apt:
           packages:
             - jackd2
     - julia: nightly
       os: linux
+      env:
+        - JACKD=1
       addons:
         apt:
           packages:
             - jackd1
     - julia: nightly
       os: linux
+      env:
+        - JACKD=2
       addons:
         apt:
           packages:
