@@ -115,6 +115,8 @@ for (T, Super, porttype) in
     @eval function Base.show(io::IO, s::$T)
         print(io, $T, "(\"$(s.name)\", $(length(s.ports)))")
     end
+
+@eval isopen{N, SR}(s::$T{N, SR}) = length(s.ports) == N
 end
     
 """Generate the name of an individual port. This is what shows up in a JACK port
@@ -269,10 +271,6 @@ function Base.close(client::JACKClient)
     if !isnullptr(client.ptr)
         deactivate(client)
     end
-    if !isnullptr(client.portptrs)
-        free(client.portptrs)
-        client.portptrs = C_NULL
-    end
     for i in length(client.sources):-1:1
         close(client.sources[i])
         deleteat!(client.sources, i)
@@ -281,16 +279,23 @@ function Base.close(client::JACKClient)
         close(client.sinks[i])
         deleteat!(client.sinks, i)
     end
+    closestatus = Cint(Success)
     if !isnullptr(client.ptr)
-        status = jack_client_close(client.ptr)
+        closestatus = jack_client_close(client.ptr)
         client.ptr = C_NULL
-        if status != Int(Success)
-            error("Error closing client $(client.name): $(status_str(status))")
-        end
+    end
+    if !isnullptr(client.portptrs)
+        free(client.portptrs)
+        client.portptrs = C_NULL
+    end
+    if closestatus != Cint(Success)
+        error("Error closing client $(client.name): $(status_str(status))")
     end
     
     nothing
 end
+
+isopen(client::JACKClient) = !isnullptr(client.ptr)
 
 sources(client::JACKClient) = client.sources
 sinks(client::JACKClient) = client.sinks
@@ -396,25 +401,28 @@ end
 # handle writes from a buffer with matching channel count and sample rate. Up/Down
 # mixing and resampling should be the responsibility of SampleTypes.jl
 function Base.write{N, SR}(sink::JACKSink{N, SR}, buf::SampleBuf{N, SR, JACKSample})
-    # a JACKSink{N. SR} should always have N set of pointers, by construction
-    @assert length(sink.ports) == N
-    nbytes = Csize_t(nframes(buf) * sizeof(JACKSample))
-    bytesleft = ones(Csize_t, N) * nbytes
-    chanptrs = Ptr{JACKSample}[channelptr(buf, ch) for ch in 1:N]
+    isopen(sink) || return 0
+    byteswritten = Csize_t(0)
+    totalbytes = Csize_t(nframes(buf) * sizeof(JACKSample))
+    chanptrs = Ptr{JACKSample}[channelptr(buf, c) for c in 1:N]
+    ports = sink.ports
     
-    for (ch, port) in enumerate(sink.ports)
-        n = jack_ringbuffer_write(port.jackbuf, chanptrs[ch], bytesleft[ch])
-        bytesleft[ch] -= n
+    n = bytesavailable(sink)
+    for ch in 1:length(ports)
+        jack_ringbuffer_write(ports[ch].jackbuf, chanptrs[ch], n)
         chanptrs[ch] += n
     end
-    while any(x -> x > 0, bytesleft)
+    byteswritten += n
+    while byteswritten < totalbytes
         # wait to be notified that some space has freed up in the ringbuf
         wait(sink.ringcondition)
-        for (ch, port) in enumerate(sink.ports)
-            n = jack_ringbuffer_write(port.jackbuf, chanptrs[ch], bytesleft[ch])
-            bytesleft[ch] -= n
+        isopen(sink) || return Int(div(byteswritten, sizeof(JACKSample)))
+        n = bytesavailable(sink)
+        for ch in 1:length(ports)
+            jack_ringbuffer_write(ports[ch].jackbuf, chanptrs[ch], n)
             chanptrs[ch] += n
         end
+        byteswritten += n
     end
     
     # by now we know we've written the whole length of the buffer
@@ -431,15 +439,6 @@ function overflowed(source::JACKSource)
     false
 end
 
-function min_read_space(source::JACKSource)
-    minspace = typemax(Csize_t)
-    for port in source.ports
-        minspace = min(minspace, jack_ringbuffer_read_space(port.jackbuf))
-    end
-    
-    minspace
-end
-
 """advances the read pointer of the ring buffer without actually reading the
 data"""
 function ringbuf_read_advance(source::JACKSource, amount)
@@ -448,31 +447,34 @@ function ringbuf_read_advance(source::JACKSource, amount)
     end
 end
 
+
 # TODO: handle multiple reader situation
 function Base.read!{N, SR}(source::JACKSource{N, SR}, buf::SampleBuf{N, SR, JACKSample})
-    bytesleft = Csize_t(nframes(buf) * sizeof(JACKSample))
+    isopen(source) || return 0
+    byteswritten = Csize_t(0)
+    totalbytes = Csize_t(nframes(buf) * sizeof(JACKSample))
     chanptrs = Ptr{JACKSample}[channelptr(buf, ch) for ch in 1:N]
+    ports = source.ports
     
     # do the first read immediately
-    minspace = min_read_space(source)
-    nbytes = sampalign(min(minspace, bytesleft))
-    for (ch, port) in enumerate(source.ports)
-        jack_ringbuffer_read(port.jackbuf, chanptrs[ch], nbytes)
+    nbytes = min(bytesavailable(source), totalbytes)
+    for ch in 1:length(ports)
+        jack_ringbuffer_read(ports[ch].jackbuf, chanptrs[ch], nbytes)
         chanptrs[ch] += nbytes
     end
-    bytesleft -= nbytes
+    byteswritten += nbytes
     
     # now we wait to be notified that there's new data to read
-    while bytesleft > 0
+    while byteswritten < totalbytes
         # wait to be notified that new samples are available in the ringbuf
         wait(source.ringcondition)
-        minspace = min_read_space(source)
-        nbytes = sampalign(min(minspace, bytesleft))
-        for (ch, port) in enumerate(source.ports)
-            jack_ringbuffer_read(port.jackbuf, chanptrs[ch], nbytes)
+        isopen(source) || return Int(div(byteswritten, sizeof(JACKSample)))
+        nbytes = min(bytesavailable(source), totalbytes - byteswritten)
+        for ch in 1:length(ports)
+            jack_ringbuffer_read(ports[ch].jackbuf, chanptrs[ch], nbytes)
             chanptrs[ch] += nbytes
         end
-        bytesleft -= nbytes
+        byteswritten += nbytes
     end
     
     # by now we know we've read the whole length of the buffer
@@ -480,14 +482,39 @@ function Base.read!{N, SR}(source::JACKSource{N, SR}, buf::SampleBuf{N, SR, JACK
 end
 
 function seekavailable(source::JACKSource)
-    minspace = navailable(source)
-    ringbuf_read_advance(source, minspace)
+    ringbuf_read_advance(source, bytesavailable(source))
 end
 
-navailable(source::JACKSource) = sampalign(min_read_space(source))
+"""Gives the least number of bytes available for writing among all the sink's
+channels, aligned to a JACKSample boundry"""
+function bytesavailable(sink::JACKSink)
+    space = typemax(Csize_t)
+    for port in sink.ports
+        space = min(space, jack_ringbuffer_write_space(port.jackbuf))
+    end
+    
+    sampalign(space)
+end
+
+"""Gives the number of frames available for writing to this sink"""
+navailable(sink::JACKSink) = div(bytesavailable(sink), sizeof(JACKSample))
+
+"""Gives the least number of bytes available for reading among all the source's
+channels, aligned to a JACKSample boundry"""
+function bytesavailable(source::JACKSource)
+    space = typemax(Csize_t)
+    for port in source.ports
+        space = min(space, jack_ringbuffer_read_space(port.jackbuf))
+    end
+    
+    sampalign(space)
+end
+
+"""Gives the number of frames available for reading from this source"""
+navailable(source::JACKSource) = div(bytesavailable(source), sizeof(JACKSample))
 
 function Base.wait(source::JACKSource)
-    navailable(source) > 0 && return nothing
+    bytesavailable(source) > 0 && return nothing
     wait(source.ringcondition)
 end
 
@@ -572,10 +599,13 @@ sampalign(value) = align(value, sizeof(JACKSample))
 # this callback gets called from within the Julia event loop, but is triggered
 # by every `process` call. It bumps any tasks waiting to read or write
 function managebuffers(client)
+    # make sure the client is still open
+    isopen(client) || return
+    
     for source in client.sources
         # if we've overflowed, advance the read head
         if overflowed(source)
-            advance = min(OVERFLOW_ADVANCE, min_read_space(source))
+            advance = min(OVERFLOW_ADVANCE, bytesavailable(source))
             ringbuf_read_advance(source, advance)
         end
         notify(source.ringcondition)
