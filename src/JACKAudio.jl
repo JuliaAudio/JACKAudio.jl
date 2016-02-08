@@ -407,7 +407,7 @@ function Base.write{N, SR}(sink::JACKSink{N, SR}, buf::SampleBuf{N, SR, JACKSamp
     chanptrs = Ptr{JACKSample}[channelptr(buf, c) for c in 1:N]
     ports = sink.ports
     
-    n = bytesavailable(sink)
+    n = min(bytesavailable(sink), totalbytes)
     for ch in 1:length(ports)
         jack_ringbuffer_write(ports[ch].jackbuf, chanptrs[ch], n)
         chanptrs[ch] += n
@@ -417,7 +417,7 @@ function Base.write{N, SR}(sink::JACKSink{N, SR}, buf::SampleBuf{N, SR, JACKSamp
         # wait to be notified that some space has freed up in the ringbuf
         wait(sink.ringcondition)
         isopen(sink) || return Int(div(byteswritten, sizeof(JACKSample)))
-        n = bytesavailable(sink)
+        n = min(bytesavailable(sink), totalbytes - byteswritten)
         for ch in 1:length(ports)
             jack_ringbuffer_write(ports[ch].jackbuf, chanptrs[ch], n)
             chanptrs[ch] += n
