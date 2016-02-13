@@ -513,11 +513,6 @@ end
 """Gives the number of frames available for reading from this source"""
 navailable(source::JACKSource) = div(bytesavailable(source), sizeof(JACKSample))
 
-function Base.wait(source::JACKSource)
-    bytesavailable(source) > 0 && return nothing
-    wait(source.ringcondition)
-end
-
 # This gets called from a separate thread, so it is VERY IMPORTANT that it not
 # allocate any memory or JIT compile when it's being run. Here be segfaults.
 function process(nframes, portptrs)

@@ -94,8 +94,8 @@ end
         # synchronize so we know we're running the test at the beginning of the
         # block. It's still not 100% deterministic but hopefully this makes it
         # pass most of the time.
-        wait(source)
-        # skip the block we received
+        read(source, 1)
+        # skip the rest of the block we received
         seekavailable(source)
         write(sink, buf)
         # this should block now as well because there weren't any more frames
