@@ -98,6 +98,7 @@ const jackd = jackver()
         # connect them in JACK
         connect(sink, source)
         buf = SampleBuf(rand(Float32, 32, 1), samplerate(sourceclient))
+        readbuf = SampleBuf(Float32, samplerate(sourceclient), size(buf))
         # clear out any audio we've accumulated in the source buffer
         seekavailable(source)
         # synchronize so we know we're running the test at the beginning of the
@@ -106,15 +107,39 @@ const jackd = jackver()
         read(source, 1)
         # skip the rest of the block we received
         seekavailable(source)
-        write(sink, buf)
-        # this should block now as well because there weren't any more frames
-        # to read. In the next process callback JACK should read from the sink
-        # and write to the source, sticking the data in readbuf
-        readbuf = read(source, 32)
+        # NB: this fails at small JACK buffer sizes on my laptop. Run with large
+        # jack buffers (e.g. 2048)
+        @sync begin
+            @async write(sink, buf)
+            # this should block now as well because there weren't any more frames
+            # to read. In the next process callback JACK should read from the sink
+            # and write to the source, sticking the data in readbuf
+            @async read!(source, readbuf)
+        end
         @test buf == readbuf
         close(sourceclient)
         close(sinkclient)
     end
+    
+    # @testset "Multiple Writers get queued" begin
+    #     sourceclient = JACKClient("Source", 1, 0; connect=false)
+    #     sinkclient = JACKClient("Sink", 0, 1; connect=false)
+    #     sink = sinks(sinkclient)[1]
+    #     source = sources(sourceclient)[1]
+    #     connect(sink, source)
+    #     
+    #     writebuf = SampleBuf(rand(Float32, JACKAudio.RINGBUF_SAMPLES + 32), samplerate(sourceclient))
+    #     readbuf = SampleBuf(Float32, samplerate(sourceclient), size(writebuf) * 2)
+    #     
+    #     seekavailable(source)
+    #     read(source, 1)
+    #     seekavailable(source)
+    #     @sync begin
+    #         @async write(sink, writebuf)
+    #         @async write(sink, writebuf)
+    #         @async read!(source, readbuf)
+    #     end
+    # end
 end
 
 end # module
