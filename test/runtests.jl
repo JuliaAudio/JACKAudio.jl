@@ -12,7 +12,10 @@ function jackver()
     verline = readlines(`jackd --version`)[1]
     ver = VersionNumber(split(verline)[end])
 
-    ver >= v"1.9" ? 2 : 1
+    jackd  = ver >= v"1.9" ? 2 : 1
+    println("jackd reported version $ver, using jackd $jackd")
+
+    jackd
 end
 
 const jackd = jackver()
