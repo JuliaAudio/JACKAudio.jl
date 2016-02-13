@@ -8,13 +8,27 @@ end
 using JACKAudio
 using SampleTypes
 
-if "JACKD" in keys(ENV) && ENV["JACKD"] == "1"
-    const jackd=1
-else
-    const jackd=2
+function jackver()
+    verline = readlines(`jackd --version`)[1]
+    ver = VersionNumber(split(verline)[2])
+
+    ver >= v"1.9" ? 2 : 1
 end
 
+const jackd = jackver()
+
 @testset "JACK Tests" begin
+    # we call the read and write functions here to make sure they're precompiled
+    c = JACKClient()
+    buf = read(sources(c)[1], 1)
+    write(sinks(c)[1], buf)
+    close(c)
+
+    c = JACKClient(1, 1)
+    buf = read(sources(c)[1], 1)
+    write(sinks(c)[1], buf)
+    close(c)
+
     # the process callback is not part of the public API, but we want to run
     # some tests on it anyways. This seems to segfault on jack1
     println("test 1")
@@ -82,13 +96,7 @@ end
         source = sources(sourceclient)[1]
         # connect them in JACK
         connect(sink, source)
-        # TODO use readblock method or blocksize or something
-        # TODO: need a connect method to connect the source and sink
         buf = SampleBuf(rand(Float32, 32, 1), samplerate(sourceclient))
-        # call the read and write functions to make sure they're compiled before
-        # we actually run the test
-        write(sink, buf)
-        read(source, 32)
         # clear out any audio we've accumulated in the source buffer
         seekavailable(source)
         # synchronize so we know we're running the test at the beginning of the
