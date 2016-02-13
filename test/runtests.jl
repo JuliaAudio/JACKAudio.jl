@@ -10,7 +10,7 @@ using SampleTypes
 
 function jackver()
     verline = readlines(`jackd --version`)[1]
-    ver = VersionNumber(split(verline)[2])
+    ver = VersionNumber(split(verline)[end])
 
     ver >= v"1.9" ? 2 : 1
 end
