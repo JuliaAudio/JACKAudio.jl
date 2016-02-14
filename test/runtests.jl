@@ -9,7 +9,7 @@ using JACKAudio
 using SampleTypes
 
 function jackver()
-    verlines = readlines(`jackd --version`)
+    verlines = readlines(ignorestatus(`jackd --version`))
     println(join(verlines))
     jackd = split(verlines[1])[1]
 
