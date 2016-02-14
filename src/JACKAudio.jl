@@ -345,29 +345,6 @@ function autoconnect(client::JACKClient)
     end
 end
 
-"""Connect the client's sinks to its sources, mostly useful for testing"""
-function selfconnect(client::JACKClient)
-    sinknames = []
-    sourcenames = []
-    for sink in client.sinks
-        N = length(sink.ports)
-        for i in 1:N
-            push!(sinknames, string(client.name, ":", portname(sink.name, N, i)))
-        end
-    end
-    for source in client.sources
-        N = length(source.ports)
-        for i in 1:N
-            push!(sourcenames, string(client.name, ":", portname(source.name, N, i)))
-        end
-    end
-    
-    for (src, dest) in zip(sinknames, sourcenames)
-        jack_connect(client.ptr, src, dest)
-    end
-
-end
-
 function Base.connect(sink::JACKSink, source::JACKSource)
     for (sinkport, sourceport) in zip(sink.ports, source.ports)
         sinkportname = string(sink.clientname, ":", sinkport.name)

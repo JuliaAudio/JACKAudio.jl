@@ -121,6 +121,7 @@ const jackd = jackver()
         close(sourceclient)
         close(sinkclient)
     end
+    println("test 7")
     
     @testset "Long reading/writing (more than ringbuffer) works" begin
         sourceclient = JACKClient("Source", 1, 0; connect=false)
@@ -140,28 +141,35 @@ const jackd = jackver()
             @async read!(source, readbuf)
         end
         @test readbuf == writebuf
+        close(sourceclient)
+        close(sinkclient)
     end
-    # @testset "Long reading/writing (more than ringbuffer) works" begin
-    #     sourceclient = JACKClient("Source", 1, 0; connect=false)
-    #     sinkclient = JACKClient("Sink", 0, 1; connect=false)
-    #     sink = sinks(sinkclient)[1]
-    #     source = sources(sourceclient)[1]
-    #     connect(sink, source)
-    #     
-    #     writebuf = SampleBuf(rand(Float32, JACKAudio.RINGBUF_SAMPLES + 32), samplerate(sourceclient))
-    #     readbuf = SampleBuf(Float32, samplerate(sourceclient), size(writebuf) * 2)
-    #     
-    #     seekavailable(source)
-    #     read(source, 1)
-    #     seekavailable(source)
-    #     @sync begin
-    #         @async write(sink, writebuf)
-    #         @async write(sink, writebuf)
-    #         @async read!(source, readbuf)
-    #     end
-    #     @test readbuf[1:length(writebuf)] == writebuf
-    #     @test readbuf[(length(writebuf)+1):end] == writebuf
-    # end
+    println("test 8")
+    
+    @testset "writers get queued" begin
+        sourceclient = JACKClient("Source", 1, 0; connect=false)
+        sinkclient = JACKClient("Sink", 0, 1; connect=false)
+        sink = sinks(sinkclient)[1]
+        source = sources(sourceclient)[1]
+        connect(sink, source)
+        
+        writebuf1 = SampleBuf(rand(Float32, JACKAudio.RINGBUF_SAMPLES * 2 + 32), samplerate(sourceclient))
+        writebuf2 = SampleBuf(rand(Float32, JACKAudio.RINGBUF_SAMPLES * 2 + 32), samplerate(sourceclient))
+        readbuf = SampleBuf(Float32, samplerate(sourceclient), length(writebuf1) + length(writebuf2))
+        
+        seekavailable(source)
+        read(source, 1)
+        seekavailable(source)
+        @sync begin
+            @async write(sink, writebuf1)
+            @async write(sink, writebuf2)
+            @async read!(source, readbuf)
+        end
+        @test readbuf[1:length(writebuf1)] == writebuf1
+        @test readbuf[(length(writebuf1)+1):end] == writebuf2
+        close(sourceclient)
+        close(sinkclient)
+    end
 end
 
 end # module
