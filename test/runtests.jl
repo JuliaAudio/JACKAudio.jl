@@ -18,6 +18,10 @@ end
 
 const jackd = jackver()
 
+# GENERAL WARNING: you probably want to run jackd with as large a buffer as
+# possible (e.g. 2048) to reduce the chance of nondeterminism caused by the
+# jack callback happening when you don't want it to
+
 @testset "JACK Tests" begin
     # we call the read and write functions here to make sure they're precompiled
     c = JACKClient()
@@ -90,7 +94,7 @@ const jackd = jackver()
     println("test 6")
     # this test is an example of how finicky it is to do synchronized audio IO
     # using a stream-based read/write API.
-    @testset "Read/Write loop" begin
+    @testset "Short Reading/Writing (less than ringbuffer) works" begin
         sourceclient = JACKClient("Source", 1, 0; connect=false)
         sinkclient = JACKClient("Sink", 0, 1; connect=false)
         sink = sinks(sinkclient)[1]
@@ -107,21 +111,37 @@ const jackd = jackver()
         read(source, 1)
         # skip the rest of the block we received
         seekavailable(source)
-        # NB: this fails at small JACK buffer sizes on my laptop. Run with large
-        # jack buffers (e.g. 2048)
-        @sync begin
-            @async write(sink, buf)
-            # this should block now as well because there weren't any more frames
-            # to read. In the next process callback JACK should read from the sink
-            # and write to the source, sticking the data in readbuf
-            @async read!(source, readbuf)
-        end
+        # this won't block because we just write directly into the ringbuf
+        write(sink, buf)
+        # this should block now as well because there weren't any more frames
+        # to read. In the next process callback JACK should read from the sink
+        # and write to the source, sticking the data in readbuf
+        read!(source, readbuf)
         @test buf == readbuf
         close(sourceclient)
         close(sinkclient)
     end
     
-    # @testset "Multiple Writers get queued" begin
+    @testset "Long reading/writing (more than ringbuffer) works" begin
+        sourceclient = JACKClient("Source", 1, 0; connect=false)
+        sinkclient = JACKClient("Sink", 0, 1; connect=false)
+        sink = sinks(sinkclient)[1]
+        source = sources(sourceclient)[1]
+        connect(sink, source)
+        
+        writebuf = SampleBuf(rand(Float32, JACKAudio.RINGBUF_SAMPLES + 32), samplerate(sourceclient))
+        readbuf = SampleBuf(Float32, samplerate(sourceclient), size(writebuf))
+        
+        seekavailable(source)
+        read(source, 1)
+        seekavailable(source)
+        @sync begin
+            @async write(sink, writebuf)
+            @async read!(source, readbuf)
+        end
+        @test readbuf == writebuf
+    end
+    # @testset "Long reading/writing (more than ringbuffer) works" begin
     #     sourceclient = JACKClient("Source", 1, 0; connect=false)
     #     sinkclient = JACKClient("Sink", 0, 1; connect=false)
     #     sink = sinks(sinkclient)[1]
@@ -139,6 +159,8 @@ const jackd = jackver()
     #         @async write(sink, writebuf)
     #         @async read!(source, readbuf)
     #     end
+    #     @test readbuf[1:length(writebuf)] == writebuf
+    #     @test readbuf[(length(writebuf)+1):end] == writebuf
     # end
 end
 
