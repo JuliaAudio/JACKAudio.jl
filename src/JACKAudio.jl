@@ -271,13 +271,13 @@ function Base.close(client::JACKClient)
     if !isnullptr(client.ptr)
         deactivate(client)
     end
-    for i in length(client.sources):-1:1
-        close(client.sources[i])
-        deleteat!(client.sources, i)
+    while length(client.sources) > 0
+        source = pop!(client.sources)
+        close(source)
     end
-    for i in length(client.sinks):-1:1
-        close(client.sinks[i])
-        deleteat!(client.sinks, i)
+    while length(client.sinks) > 0
+        sink = pop!(client.sinks)
+        close(sink)
     end
     closestatus = Cint(Success)
     if !isnullptr(client.ptr)
