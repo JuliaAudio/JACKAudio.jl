@@ -9,13 +9,11 @@ using JACKAudio
 using SampleTypes
 
 function jackver()
-    verline = readlines(`jackd --version`)[1]
-    ver = VersionNumber(split(verline)[end])
+    verlines = readlines(`jackd --version`)
+    println(join(verlines))
+    jackd = split(verlines[1])[1]
 
-    jackd  = ver >= v"1.9" ? 2 : 1
-    println("jackd reported version $ver, using jackd $jackd")
-
-    jackd
+    jackd == "jackdmp" ? 2 : 1
 end
 
 const jackd = jackver()
