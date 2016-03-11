@@ -145,8 +145,33 @@ const jackd = jackver()
         close(sinkclient)
     end
     println("test 8")
-    
+
     @testset "writers get queued" begin
+        sourceclient = JACKClient("Source", 1, 0; connect=false)
+        sinkclient = JACKClient("Sink", 0, 1; connect=false)
+        sink = sinks(sinkclient)[1]
+        source = sources(sourceclient)[1]
+        connect(sink, source)
+
+        writebuf1 = SampleBuf(rand(Float32, JACKAudio.RINGBUF_SAMPLES * 2 + 32), samplerate(sourceclient))
+        writebuf2 = SampleBuf(rand(Float32, JACKAudio.RINGBUF_SAMPLES * 2 + 32), samplerate(sourceclient))
+        readbuf = SampleBuf(Float32, samplerate(sourceclient), length(writebuf1) + length(writebuf2))
+
+        seekavailable(source)
+        read(source, 1)
+        seekavailable(source)
+        @sync begin
+            @async write(sink, writebuf1)
+            @async write(sink, writebuf2)
+            @async read!(source, readbuf)
+        end
+        @test readbuf[1:length(writebuf1)] == writebuf1
+        @test readbuf[(length(writebuf1)+1):end] == writebuf2
+        close(sourceclient)
+        close(sinkclient)
+    end
+
+    @testset "readers get queued" begin
         sourceclient = JACKClient("Source", 1, 0; connect=false)
         sinkclient = JACKClient("Sink", 0, 1; connect=false)
         sink = sinks(sinkclient)[1]
