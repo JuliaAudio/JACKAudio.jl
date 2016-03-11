@@ -3,6 +3,7 @@ __precompile__()
 module JACKAudio
 
 using SampleTypes
+import SampleTypes: nchannels, samplerate, nframes
 using Base.Libc: malloc, free
 
 export JACKClient, sources, sinks, seekavailable
@@ -82,17 +83,17 @@ for (T, Super, porttype) in
     as a group. There can be multiple JACKSources and JACKSinks in a JACKClient,
     and all the sources and sinks in a client get updated by the same `process`
     method."""
-    @eval immutable $T{N, SR} <: $Super{N, SR, JACKSample}
+    @eval immutable $T <: $Super{JACKSample}
         name::ASCIIString
         client::ClientPtr
         clientname::ASCIIString
         ports::Vector{JACKPort}
         ringcondition::Condition # used to synchronize any in-progress transations
         
-        function $T(client::ClientPtr, clientname, name)
+        function $T(client::ClientPtr, clientname, name, nchan)
             ports = JACKPort[]
-            for ch in 1:N
-                pname = portname(name, N, ch)
+            for ch in 1:nchan
+                pname = portname(name, nchan, ch)
                 push!(ports, JACKPort(client, pname, $porttype))
             end
             
@@ -102,11 +103,12 @@ for (T, Super, porttype) in
         end
     end
     
-    @eval $T(client, clientname, name, nchannels) =
-        $T{nchannels, Int(jack_get_sample_rate(client))}(client, clientname, name)
-        
+    @eval samplerate(stream::$T) = SampleRate(jack_get_sample_rate(stream.client))
+    @eval nchannels(stream::$T) = length(stream.ports)
+    
     @eval function Base.close(s::$T)
-        for port in s.ports
+        while length(s.ports) > 0
+            port = pop!(s.ports)
             jack_port_unregister(s.client, port.ptr)
             jack_ringbuffer_free(port.jackbuf)
         end
@@ -116,7 +118,7 @@ for (T, Super, porttype) in
         print(io, $T, "(\"$(s.name)\", $(length(s.ports)))")
     end
 
-@eval isopen{N, SR}(s::$T{N, SR}) = length(s.ports) == N
+    @eval isopen(s::$T) = length(s.ports) > 0
 end
     
 """Generate the name of an individual port. This is what shows up in a JACK port
@@ -374,14 +376,13 @@ function deactivate(client::JACKClient)
 end
 
 
-# TODO: handle multiple writer situation
 # handle writes from a buffer with matching channel count and sample rate. Up/Down
 # mixing and resampling should be the responsibility of SampleTypes.jl
-function Base.write{N, SR}(sink::JACKSink{N, SR}, buf::SampleBuf{N, SR, JACKSample})
+function SampleTypes.unsafe_write(sink::JACKSink, buf::SampleBuf)
     isopen(sink) || return 0
     byteswritten = Csize_t(0)
     totalbytes = Csize_t(nframes(buf) * sizeof(JACKSample))
-    chanptrs = Ptr{JACKSample}[channelptr(buf, c) for c in 1:N]
+    chanptrs = Ptr{JACKSample}[channelptr(buf, c) for c in 1:nchannels(buf)]
     ports = sink.ports
     
     n = min(bytesavailable(sink), totalbytes)
@@ -425,12 +426,13 @@ function ringbuf_read_advance(source::JACKSource, amount)
 end
 
 
-# TODO: handle multiple reader situation
-function Base.read!{N, SR}(source::JACKSource{N, SR}, buf::SampleBuf{N, SR, JACKSample})
+# read from the given source into the buffer, assuming that the channel count,
+# sample rate and element type match
+function SampleTypes.unsafe_read!(source::JACKSource, buf::SampleBuf)
     isopen(source) || return 0
     byteswritten = Csize_t(0)
     totalbytes = Csize_t(nframes(buf) * sizeof(JACKSample))
-    chanptrs = Ptr{JACKSample}[channelptr(buf, ch) for ch in 1:N]
+    chanptrs = Ptr{JACKSample}[channelptr(buf, ch) for ch in 1:nchannels(buf)]
     ports = source.ports
     
     # do the first read immediately

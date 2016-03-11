@@ -170,6 +170,8 @@ const jackd = jackver()
         close(sourceclient)
         close(sinkclient)
     end
+    
+    println("test 9")
 
     @testset "readers get queued" begin
         sourceclient = JACKClient("Source", 1, 0; connect=false)
