@@ -5,6 +5,7 @@ module JACKAudio
 using SampleTypes
 import SampleTypes: nchannels, samplerate, nframes
 using Base.Libc: malloc, free
+using SIUnits
 
 export JACKClient, sources, sinks, seekavailable
 
@@ -27,8 +28,8 @@ function __init__()
     global const shutdown_cb = cfunction(shutdown, Void, (Ptr{JACKClient}, ))
     global const info_handler_cb = cfunction(info_handler, Void, (Cstring, ))
     global const error_handler_cb = cfunction(error_handler, Void, (Cstring, ))
-    
-    
+
+
     ccall((:jack_set_info_function, :libjack), Void, (Ptr{Void},),
         info_handler_cb)
     ccall((:jack_set_error_function, :libjack), Void, (Ptr{Void},),
@@ -56,19 +57,19 @@ immutable JACKPort
     name::ASCIIString
     ptr::PortPtr
     jackbuf::RingBufPtr
-    
+
     function JACKPort(client, name, porttype)
         ptr = jack_port_register(client, name, JACK_DEFAULT_AUDIO_TYPE, porttype, 0)
         if isnullptr(ptr)
             error("Failed to create port for $name")
         end
-        
+
         bufptr = jack_ringbuffer_create(RINGBUF_SAMPLES * sizeof(JACKSample))
         if isnullptr(bufptr)
             jack_port_unregister(client, ptr)
             error("Failed to create ringbuffer for $name")
         end
-        
+
         new(name, ptr, bufptr)
     end
 end
@@ -83,29 +84,30 @@ for (T, Super, porttype) in
     as a group. There can be multiple JACKSources and JACKSinks in a JACKClient,
     and all the sources and sinks in a client get updated by the same `process`
     method."""
-    @eval immutable $T <: $Super{JACKSample}
+    @eval immutable $T <: $Super
         name::ASCIIString
         client::ClientPtr
         clientname::ASCIIString
         ports::Vector{JACKPort}
         ringcondition::Condition # used to synchronize any in-progress transations
-        
+
         function $T(client::ClientPtr, clientname, name, nchan)
             ports = JACKPort[]
             for ch in 1:nchan
                 pname = portname(name, nchan, ch)
                 push!(ports, JACKPort(client, pname, $porttype))
             end
-            
+
             # TODO: switch to a mutable type, add finalizer, null out pointers
             # after closing/freeing them
             new(name, client, clientname, ports, Condition())
         end
     end
-    
-    @eval samplerate(stream::$T) = SampleRate(jack_get_sample_rate(stream.client))
+
+    @eval samplerate(stream::$T) = quantity(Int, Hz)(jack_get_sample_rate(stream.client))
     @eval nchannels(stream::$T) = length(stream.ports)
-    
+    @eval Base.eltype(stream::$T) = JACKSample
+
     @eval function Base.close(s::$T)
         while length(s.ports) > 0
             port = pop!(s.ports)
@@ -113,14 +115,14 @@ for (T, Super, porttype) in
             jack_ringbuffer_free(port.jackbuf)
         end
     end
-    
+
     @eval function Base.show(io::IO, s::$T)
         print(io, $T, "(\"$(s.name)\", $(length(s.ports)))")
     end
 
     @eval isopen(s::$T) = length(s.ports) > 0
 end
-    
+
 """Generate the name of an individual port. This is what shows up in a JACK port
 list"""
 function portname(name, totalchans, chan)
@@ -162,7 +164,7 @@ type JACKClient
             info("Given name not unique, renamed to ", name)
         end
         # println("Opened JACK Client with status: ", status_str(status[]))
-        
+
         # we malloc 2*nsources + 2*nsinks + 3, because for each source and sink
         # we have the port pointer and the ringbuf pointer, the source and sink
         # lists are null-terminated, and we need to include the callback handle
@@ -176,11 +178,11 @@ type JACKClient
             jack_client_close(clientptr)
             error("Failure allocating memory for JACK client \"$name\"")
         end
-            
+
         # for now we leave the callback field uninitialized because we need the
         # client reference to build the callback closure
         client = new(name, clientptr, JACKSource[], JACKSink[], portptrs)
-        
+
         # TODO: break out the source/sink addition to separate functions
         # initialize the sources and sinks
         ptridx = 1
@@ -202,7 +204,7 @@ type JACKClient
         # list of sources is null-terminated
         unsafe_store!(portptrs, C_NULL, ptridx)
         ptridx += 1
-        
+
         try
             for sinkargs in sinks
                 sink = JACKSink(clientptr, name, sinkargs[1], sinkargs[2])
@@ -221,29 +223,29 @@ type JACKClient
         # list of sinks is null-terminated
         unsafe_store!(portptrs, C_NULL, ptridx)
         ptridx += 1
-        
+
         client.callback = Base.SingleAsyncWork(data -> managebuffers(client))
-        
+
         # and finally we store the callback handle so the JACK process callback
         # can trigger the managebuffers function to run in the julia context
         unsafe_store!(portptrs, client.callback.handle, ptridx)
-        
+
         jack_set_process_callback(clientptr, process_cb, portptrs)
         jack_on_shutdown(clientptr, shutdown_cb, pointer_from_objref(client))
-        
+
         # useful when debugging, because you'll see errors. not sure how safe it
         # is though
         # process(128, portptrs)
-        
+
         finalizer(client, close)
-        
+
         if active
             activate(client)
             if connect
                 autoconnect(client)
             end
         end
-        
+
         client
     end
 end
@@ -255,10 +257,10 @@ SampleTypes.samplerate(client::JACKClient) =
 JACKClient(name::AbstractString,
             sourcecount::Integer, sinkcount::Integer; kwargs...) =
     JACKClient(name, [("In", sourcecount)], [("Out", sinkcount)]; kwargs...)
-    
+
 JACKClient(sourcecount::Integer, sinkcount::Integer; kwargs...) =
     JACKClient("Julia", [("In", sourcecount)], [("Out", sinkcount)]; kwargs...)
-    
+
 function Base.show(io::IO, client::JACKClient)
     print(io, "JACKClient(\"$(client.name)\", [")
     sources = ASCIIString["(\"$(source.name)\", $(nchannels(source)))" for source in client.sources]
@@ -293,7 +295,7 @@ function Base.close(client::JACKClient)
     if closestatus != Cint(Success)
         error("Error closing client $(client.name): $(status_str(status))")
     end
-    
+
     nothing
 end
 
@@ -321,7 +323,7 @@ function autoconnect(client::JACKClient)
                 localportname = string(client.name, ":",
                                        portname(stream.name, length(stream.ports), ch))
                 jack_connect(client.ptr, unsafe_load(ports, idx), bytestring(localportname))
-                
+
                 idx += 1
             end
             isnullptr(unsafe_load(ports, idx)) && break
@@ -338,7 +340,7 @@ function autoconnect(client::JACKClient)
                 localportname = string(client.name, ":",
                                        portname(stream.name, length(stream.ports), ch))
                 jack_connect(client.ptr, bytestring(localportname), unsafe_load(ports, idx))
-                
+
                 idx += 1
             end
             isnullptr(unsafe_load(ports, idx)) && break
@@ -361,7 +363,7 @@ function activate(client::JACKClient)
     if status != Int(Success)
         error("Error activating client $(client.name): $(status_str(status))")
     end
-    
+
     nothing
 end
 
@@ -371,7 +373,7 @@ function deactivate(client::JACKClient)
     if status != Int(Success)
         error("Error deactivating client $(client.name): $(status_str(status))")
     end
-    
+
     nothing
 end
 
@@ -384,7 +386,7 @@ function SampleTypes.unsafe_write(sink::JACKSink, buf::SampleBuf)
     totalbytes = Csize_t(nframes(buf) * sizeof(JACKSample))
     chanptrs = Ptr{JACKSample}[channelptr(buf, c) for c in 1:nchannels(buf)]
     ports = sink.ports
-    
+
     n = min(bytesavailable(sink), totalbytes)
     for ch in 1:length(ports)
         jack_ringbuffer_write(ports[ch].jackbuf, chanptrs[ch], n)
@@ -402,7 +404,7 @@ function SampleTypes.unsafe_write(sink::JACKSink, buf::SampleBuf)
         end
         byteswritten += n
     end
-    
+
     # by now we know we've written the whole length of the buffer
     nframes(buf)
 end
@@ -413,7 +415,7 @@ function overflowed(source::JACKSource)
             return true
         end
     end
-    
+
     false
 end
 
@@ -434,7 +436,7 @@ function SampleTypes.unsafe_read!(source::JACKSource, buf::SampleBuf)
     totalbytes = Csize_t(nframes(buf) * sizeof(JACKSample))
     chanptrs = Ptr{JACKSample}[channelptr(buf, ch) for ch in 1:nchannels(buf)]
     ports = source.ports
-    
+
     # do the first read immediately
     nbytes = min(bytesavailable(source), totalbytes)
     for ch in 1:length(ports)
@@ -442,7 +444,7 @@ function SampleTypes.unsafe_read!(source::JACKSource, buf::SampleBuf)
         chanptrs[ch] += nbytes
     end
     byteswritten += nbytes
-    
+
     # now we wait to be notified that there's new data to read
     while byteswritten < totalbytes
         # wait to be notified that new samples are available in the ringbuf
@@ -455,7 +457,7 @@ function SampleTypes.unsafe_read!(source::JACKSource, buf::SampleBuf)
         end
         byteswritten += nbytes
     end
-    
+
     # by now we know we've read the whole length of the buffer
     nframes(buf)
 end
@@ -471,7 +473,7 @@ function bytesavailable(sink::JACKSink)
     for port in sink.ports
         space = min(space, jack_ringbuffer_write_space(port.jackbuf))
     end
-    
+
     sampalign(space)
 end
 
@@ -485,7 +487,7 @@ function bytesavailable(source::JACKSource)
     for port in source.ports
         space = min(space, jack_ringbuffer_read_space(port.jackbuf))
     end
-    
+
     sampalign(space)
 end
 
@@ -496,10 +498,10 @@ navailable(source::JACKSource) = div(bytesavailable(source), sizeof(JACKSample))
 # allocate any memory or JIT compile when it's being run. Here be segfaults.
 function process(nframes, portptrs)
     nbytes::Csize_t = nframes * sizeof(JACKSample)
-    
+
     ptridx = 1
     # handle sources
-    
+
     # we want to find the minimum amount of space in any ringbuffer, so we keep
     # all the channels synchronized even if a channel is overflowing
     minbytes = nbytes
@@ -510,25 +512,25 @@ function process(nframes, portptrs)
     end
     # make sure we only write whole samples
     minbytes = sampalign(minbytes)
-    
+
     # rewind back to the beginning for the actual writes
     ptridx = 1
-    
+
     while !isnullptr(unsafe_load(portptrs, ptridx))
         source = unsafe_load(portptrs, ptridx)
         ringbuf = unsafe_load(portptrs, ptridx + 1)
         ptridx += 2
-    
+
         buf = jack_port_get_buffer(source, nframes)
         jack_ringbuffer_write(ringbuf, buf, minbytes)
     end
     # skip over the null terminator
     ptridx += 1
-    
+
     sinkidx = ptridx
-    
+
     # handle sinks
-    
+
     minbytes = nbytes
     # we want to find the minimum number of bytes available in any ringbuffer,
     # so we keep all the channels synchronized
@@ -539,14 +541,14 @@ function process(nframes, portptrs)
     end
     # make sure we only read whole samples
     minbytes = sampalign(minbytes)
-    
+
     # rewind back to the beginning of the sinks
     ptridx = sinkidx
     while !isnullptr(unsafe_load(portptrs, ptridx))
         sink = unsafe_load(portptrs, ptridx)
         ringbuf = unsafe_load(portptrs, ptridx + 1)
         ptridx += 2
-        
+
         buf = jack_port_get_buffer(sink, nframes)
         # we know we're able to read at least minbytes
         jack_ringbuffer_read(ringbuf, buf, minbytes)
@@ -556,13 +558,13 @@ function process(nframes, portptrs)
     end
     # skip over the null terminator
     ptridx += 1
-        
+
     handle = unsafe_load(portptrs, ptridx)
-    
+
     # notify the managebuffers, which will get called with a reference to
     # this client
     ccall(:uv_async_send, Void, (Ptr{Void},), handle)
-    
+
     Cint(0)
 end
 
@@ -575,7 +577,7 @@ sampalign(value) = align(value, sizeof(JACKSample))
 function managebuffers(client)
     # make sure the client is still open
     isopen(client) || return
-    
+
     for source in client.sources
         # if we've overflowed, advance the read head
         if overflowed(source)
@@ -584,7 +586,7 @@ function managebuffers(client)
         end
         notify(source.ringcondition)
     end
-    
+
     for sink in client.sinks
         notify(sink.ringcondition)
     end
