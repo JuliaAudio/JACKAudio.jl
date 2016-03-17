@@ -25,23 +25,19 @@ const jackd = jackver()
 @testset "JACK Tests" begin
     # we call the read and write functions here to make sure they're precompiled
     c = JACKClient()
-    source = sources(c)[1]
-    sink = sinks(c)[1]
-    buf = read(source, 1)
-    read!(source, buf)
-    write(sink, buf)
+    buf = read(c, 1)
+    read!(c, buf)
+    write(c, buf)
     close(c)
 
     c = JACKClient(1, 1)
-    source = sources(c)[1]
-    sink = sinks(c)[1]
-    buf = read(source, 1)
-    read!(source, buf)
-    write(sink, buf)
+    buf = read(c, 1)
+    read!(c, buf)
+    write(c, buf)
     # and a 1D buf
     monobuf = SampleBuf(rand(Float32, 32), samplerate(c))
-    read!(source, monobuf)
-    write(sink, monobuf)
+    read!(c, monobuf)
+    write(c, monobuf)
     close(c)
 
     # the process callback is not part of the public API, but we want to run
@@ -107,26 +103,24 @@ const jackd = jackver()
     @testset "Short Reading/Writing (less than ringbuffer) works" begin
         sourceclient = JACKClient("Source", 1, 0; connect=false)
         sinkclient = JACKClient("Sink", 0, 1; connect=false)
-        sink = sinks(sinkclient)[1]
-        source = sources(sourceclient)[1]
         # connect them in JACK
-        connect(sink, source)
+        connect(sinkclient, sourceclient)
         buf = SampleBuf(rand(Float32, 32, 1), samplerate(sourceclient))
         readbuf = SampleBuf(Float32, samplerate(sourceclient), size(buf))
         # clear out any audio we've accumulated in the source buffer
-        seekavailable(source)
+        seekavailable(sources(sourceclient)[1])
         # synchronize so we know we're running the test at the beginning of the
         # block. It's still not 100% deterministic but hopefully this makes it
         # pass most of the time.
-        read(source, 1)
+        read(sourceclient, 1)
         # skip the rest of the block we received
-        seekavailable(source)
+        seekavailable(sources(sourceclient)[1])
         # this won't block because we just write directly into the ringbuf
-        write(sink, buf)
+        write(sinkclient, buf)
         # this should block now as well because there weren't any more frames
         # to read. In the next process callback JACK should read from the sink
         # and write to the source, sticking the data in readbuf
-        read!(source, readbuf)
+        read!(sourceclient, readbuf)
         @test buf == readbuf
         close(sourceclient)
         close(sinkclient)
@@ -136,19 +130,17 @@ const jackd = jackver()
     @testset "Long reading/writing (more than ringbuffer) works" begin
         sourceclient = JACKClient("Source", 1, 0; connect=false)
         sinkclient = JACKClient("Sink", 0, 1; connect=false)
-        sink = sinks(sinkclient)[1]
-        source = sources(sourceclient)[1]
-        connect(sink, source)
+        connect(sinkclient, sourceclient)
 
         writebuf = SampleBuf(rand(Float32, JACKAudio.RINGBUF_SAMPLES + 32), samplerate(sourceclient))
         readbuf = SampleBuf(Float32, samplerate(sourceclient), size(writebuf))
 
-        seekavailable(source)
-        read(source, 1)
-        seekavailable(source)
+        seekavailable(sources(sourceclient)[1])
+        read(sourceclient, 1)
+        seekavailable(sources(sourceclient)[1])
         @sync begin
-            @async write(sink, writebuf)
-            @async read!(source, readbuf)
+            @async write(sinkclient, writebuf)
+            @async read!(sourceclient, readbuf)
         end
         @test readbuf == writebuf
         close(sourceclient)
@@ -159,21 +151,19 @@ const jackd = jackver()
     @testset "writers get queued" begin
         sourceclient = JACKClient("Source", 1, 0; connect=false)
         sinkclient = JACKClient("Sink", 0, 1; connect=false)
-        sink = sinks(sinkclient)[1]
-        source = sources(sourceclient)[1]
-        connect(sink, source)
+        connect(sinkclient, sourceclient)
 
         writebuf1 = SampleBuf(rand(Float32, JACKAudio.RINGBUF_SAMPLES * 2 + 32), samplerate(sourceclient))
         writebuf2 = SampleBuf(rand(Float32, JACKAudio.RINGBUF_SAMPLES * 2 + 32), samplerate(sourceclient))
         readbuf = SampleBuf(Float32, samplerate(sourceclient), length(writebuf1) + length(writebuf2))
 
-        seekavailable(source)
-        read(source, 1)
-        seekavailable(source)
+        seekavailable(sources(sourceclient)[1])
+        read(sourceclient, 1)
+        seekavailable(sources(sourceclient)[1])
         @sync begin
-            @async write(sink, writebuf1)
-            @async write(sink, writebuf2)
-            @async read!(source, readbuf)
+            @async write(sinkclient, writebuf1)
+            @async write(sinkclient, writebuf2)
+            @async read!(sourceclient, readbuf)
         end
         @test readbuf[1:length(writebuf1)] == writebuf1
         @test readbuf[(length(writebuf1)+1):end] == writebuf2
@@ -186,21 +176,19 @@ const jackd = jackver()
     @testset "readers get queued" begin
         sourceclient = JACKClient("Source", 1, 0; connect=false)
         sinkclient = JACKClient("Sink", 0, 1; connect=false)
-        sink = sinks(sinkclient)[1]
-        source = sources(sourceclient)[1]
-        connect(sink, source)
+        connect(sinkclient, sourceclient)
 
         writebuf1 = SampleBuf(rand(Float32, JACKAudio.RINGBUF_SAMPLES * 2 + 32), samplerate(sourceclient))
         writebuf2 = SampleBuf(rand(Float32, JACKAudio.RINGBUF_SAMPLES * 2 + 32), samplerate(sourceclient))
         readbuf = SampleBuf(Float32, samplerate(sourceclient), length(writebuf1) + length(writebuf2))
 
-        seekavailable(source)
-        read(source, 1)
-        seekavailable(source)
+        seekavailable(sources(sourceclient)[1])
+        read(sourceclient, 1)
+        seekavailable(sources(sourceclient)[1])
         @sync begin
-            @async write(sink, writebuf1)
-            @async write(sink, writebuf2)
-            @async read!(source, readbuf)
+            @async write(sinkclient, writebuf1)
+            @async write(sinkclient, writebuf2)
+            @async read!(sourceclient, readbuf)
         end
         @test readbuf[1:length(writebuf1)] == writebuf1
         @test readbuf[(length(writebuf1)+1):end] == writebuf2

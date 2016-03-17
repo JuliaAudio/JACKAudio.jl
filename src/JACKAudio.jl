@@ -304,6 +304,12 @@ isopen(client::JACKClient) = !isnullptr(client.ptr)
 sources(client::JACKClient) = client.sources
 sinks(client::JACKClient) = client.sinks
 
+# define wrapper methods to more conveniently access the sources and sinks
+Base.read!(client::JACKClient, args...) = read!(client.sources[1], args...)
+Base.read(client::JACKClient, args...) = read(client.sources[1], args...)
+Base.write(client::JACKClient, args...) = write(client.sinks[1], args...)
+Base.connect(c1::JACKClient, c2::JACKClient) = connect(c1.sinks[1], c2.sources[1])
+
 # TODO: julia PR to extend Base.isnull rather than using isnullptr
 isnullptr(ptr::Ptr) = Ptr{Void}(ptr) == C_NULL
 isnullptr(ptr::Cstring) = Ptr{Cchar}(ptr) == C_NULL
