@@ -1,6 +1,7 @@
 # JACKAudio
 
 [![Build Status](https://travis-ci.org/JuliaAudio/JACKAudio.jl.svg?branch=master)](https://travis-ci.org/JuliaAudio/JACKAudio.jl)
+[![codecov.io](https://codecov.io/github/JuliaAudio/JACKAudio.jl/coverage.svg?branch=master)](https://codecov.io/github/JuliaAudio/JACKAudio.jl?branch=master)
 
 This package allows Julia software to read and write audio through the [JACK Audio Connection Kit](http://www.jackaudio.org/), a cross-platform, low-latency audio system.
 
@@ -62,4 +63,3 @@ Interfacing with JACK sources and sinks is best done with SampleBufs, from the `
 buf = read(source, 5s)
 write(sink, buf)
 ```
-
