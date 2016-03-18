@@ -3,7 +3,9 @@
 [![Build Status](https://travis-ci.org/JuliaAudio/JACKAudio.jl.svg?branch=master)](https://travis-ci.org/JuliaAudio/JACKAudio.jl)
 [![codecov.io](https://codecov.io/github/JuliaAudio/JACKAudio.jl/coverage.svg?branch=master)](https://codecov.io/github/JuliaAudio/JACKAudio.jl?branch=master)
 
-This package allows Julia software to read and write audio through the [JACK Audio Connection Kit](http://www.jackaudio.org/), a cross-platform, low-latency audio system.
+This package allows Julia software to read and write audio through the [JACK Audio Connection Kit](http://www.jackaudio.org/), a cross-platform, low-latency audio system. The goal is to be able to easily interface with JACK using the `SampleSink`/`SampleSource` API defined in [SampleTypes.jl](https://github.com/JuliaAudio/SampleTypes.jl), not necessarily to create a full-featured JACK library (though PRs are welcome to wrap more of libjack).
+
+The package is tested against both JACK1 and JACK2, and on OSX and Linux.
 
 ## Prerequisites
 
@@ -57,9 +59,19 @@ source = sources(c)[1]
 sink = sinks(c)[1]
 ```
 
-Interfacing with JACK sources and sinks is best done with SampleBufs, from the `SampleTypes` package, which handles type and samplerate conversions, as well as convenience features like indexing by time. For instance, to read 5 seconds of audio and play it back, you can write:
+Interfacing with JACK sources and sinks is best done with SampleBufs, from the [SampleTypes.jl](https://github.com/JuliaAudio/SampleTypes.jl) package, which handles type and samplerate conversions, as well as convenience features like indexing by time. For instance, to read 5 seconds of audio and play it back, you can write:
 
 ```julia
+using SampleTypes
+
 buf = read(source, 5s)
 write(sink, buf)
+```
+
+Because the common case is to have a JACKClient with exactly one source and one sink, JACKAudio implements wrapper functions for `read!`, `read`, and `write` that pass any arguments through to the first sink or source, so the above example could become:
+
+```julia
+c = JACKClient()
+buf = read(c, 5s)
+write(c, buf)
 ```
