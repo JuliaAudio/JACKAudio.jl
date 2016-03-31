@@ -6,7 +6,7 @@ else
     using BaseTestNext
 end
 using JACKAudio
-using SampleTypes
+using SampledSignals
 
 function jackver()
     verlines = readlines(ignorestatus(`jackd --version`))

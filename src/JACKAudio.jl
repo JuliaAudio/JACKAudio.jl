@@ -2,8 +2,8 @@ __precompile__()
 
 module JACKAudio
 
-using SampleTypes
-import SampleTypes: nchannels, samplerate, nframes
+using SampledSignals
+import SampledSignals: nchannels, samplerate, nframes
 using Base.Libc: malloc, free
 using SIUnits
 
@@ -250,7 +250,7 @@ type JACKClient
     end
 end
 
-SampleTypes.samplerate(client::JACKClient) =
+SampledSignals.samplerate(client::JACKClient) =
     quantity(Int, Hz)(jack_get_sample_rate(client.ptr))
 
 # also allow constructing just by giving channel counts
@@ -385,8 +385,8 @@ end
 
 
 # handle writes from a buffer with matching channel count and sample rate. Up/Down
-# mixing and resampling should be the responsibility of SampleTypes.jl
-function SampleTypes.unsafe_write(sink::JACKSink, buf::SampleBuf)
+# mixing and resampling should be the responsibility of SampledSignals.jl
+function SampledSignals.unsafe_write(sink::JACKSink, buf::SampleBuf)
     isopen(sink) || return 0
     byteswritten = Csize_t(0)
     totalbytes = Csize_t(nframes(buf) * sizeof(JACKSample))
@@ -436,7 +436,7 @@ end
 
 # read from the given source into the buffer, assuming that the channel count,
 # sample rate and element type match
-function SampleTypes.unsafe_read!(source::JACKSource, buf::SampleBuf)
+function SampledSignals.unsafe_read!(source::JACKSource, buf::SampleBuf)
     isopen(source) || return 0
     byteswritten = Csize_t(0)
     totalbytes = Csize_t(nframes(buf) * sizeof(JACKSample))
