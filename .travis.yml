@@ -40,9 +40,7 @@ matrix:
           packages:
             - jackd2
 script:
- - jackd -r -p24 -ddummy -r48000 -p2048 -w 100000 &
- - sleep 5
  - if [[ -a .git/shallow ]]; then git fetch --unshallow; fi
- - julia -e 'Pkg.clone(pwd()); Pkg.build("JACKAudio"); Pkg.test("JACKAudio"; coverage=true)'
+ - jackd -r -p24 -ddummy -r48000 -p2048 -w 100000 &; sleep 5; julia -e 'Pkg.clone(pwd()); Pkg.build("JACKAudio"); Pkg.test("JACKAudio"; coverage=true)'
 after_success:
   - julia -e 'cd(Pkg.dir("JACKAudio")); Pkg.add("Coverage"); using Coverage; Codecov.submit(process_folder())'
