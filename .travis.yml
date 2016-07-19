@@ -40,9 +40,8 @@ matrix:
           packages:
             - jackd2
 script:
- - jackd -r -p24 -ddummy -r48000 -p2048 &
- # SampledSignals is unregistered so clone it for testing
- - julia -e 'Pkg.clone("https://github.com/JuliaAudio/SampledSignals.jl.git")'
+ - jackd -r -p24 -ddummy -r48000 -p2048 -m &
+ - sleep 5
  - if [[ -a .git/shallow ]]; then git fetch --unshallow; fi
  - julia -e 'Pkg.clone(pwd()); Pkg.build("JACKAudio"); Pkg.test("JACKAudio"; coverage=true)'
 after_success:
