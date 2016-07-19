@@ -2,6 +2,9 @@ __precompile__()
 
 module JACKAudio
 
+using Compat
+import Compat.ASCIIString
+
 using SampledSignals
 import SampledSignals: nchannels, samplerate, nframes
 using Base.Libc: malloc, free
@@ -37,13 +40,13 @@ function __init__()
 end
 
 function error_handler(msg)
-    println("libjack: ERROR: $(bytestring(msg))")
+    println("libjack: ERROR: $(unsafe_string(msg))")
 
     nothing
 end
 
 function info_handler(msg)
-    println("libjack: $(bytestring(msg))")
+    println("libjack: $(unsafe_string(msg))")
 
     nothing
 end
@@ -160,7 +163,7 @@ type JACKClient
             # info("Started JACK Server")
         end
         if status[] & NameNotUnique
-            name = bytestring(jack_get_client_name(clientptr))
+            name = unsafe_string(jack_get_client_name(clientptr))
             info("Given name not unique, renamed to ", name)
         end
         # println("Opened JACK Client with status: ", status_str(status[]))
@@ -265,9 +268,9 @@ function Base.show(io::IO, client::JACKClient)
     print(io, "JACKClient(\"$(client.name)\", [")
     sources = ASCIIString["(\"$(source.name)\", $(nchannels(source)))" for source in client.sources]
     sinks = ASCIIString["(\"$(sink.name)\", $(nchannels(sink)))" for sink in client.sinks]
-    print_joined(io, sources, ", ")
+    join(io, sources, ", ")
     print(io, "], [")
-    print_joined(io, sinks, ", ")
+    join(io, sinks, ", ")
     print(io, "])")
 end
 
@@ -328,7 +331,7 @@ function autoconnect(client::JACKClient)
                 isnullptr(unsafe_load(ports, idx)) && break
                 localportname = string(client.name, ":",
                                        portname(stream.name, length(stream.ports), ch))
-                jack_connect(client.ptr, unsafe_load(ports, idx), bytestring(localportname))
+                jack_connect(client.ptr, unsafe_load(ports, idx), pointer(localportname))
 
                 idx += 1
             end
@@ -345,7 +348,7 @@ function autoconnect(client::JACKClient)
                 isnullptr(unsafe_load(ports, idx)) && break
                 localportname = string(client.name, ":",
                                        portname(stream.name, length(stream.ports), ch))
-                jack_connect(client.ptr, bytestring(localportname), unsafe_load(ports, idx))
+                jack_connect(client.ptr, pointer(localportname), unsafe_load(ports, idx))
 
                 idx += 1
             end

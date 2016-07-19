@@ -41,16 +41,16 @@ typealias RingBufPtr Ptr{RingBuf}
     SessionID = 0x20)
 
 # useful for OR'ing options together
-Base.(:|)(l::Option, r::Option) = UInt(l) | UInt(r)
-    
+@compat Base.:|(l::Option, r::Option) = UInt(l) | UInt(r)
+
 @enum(PortFlag,
   PortIsInput = 0x01,
   PortIsOutput = 0x02, 
   PortIsPhysical = 0x04, 
   PortCanMonitor = 0x08, 
   PortIsTerminal = 0x10)
-  
-Base.(:|)(l::PortFlag, r::PortFlag) = UInt(l) | UInt(r)
+
+@compat Base.:|(l::PortFlag, r::PortFlag) = UInt(l) | UInt(r)
 
 # some functions also return a -1 on failure
 @enum(Status,
@@ -94,7 +94,7 @@ Base.(:|)(l::PortFlag, r::PortFlag) = UInt(l) | UInt(r)
 status_str(status::Status) = string(status)
 
 # use & syntax for checking a flag, but return a boolean
-Base.(:&){T <: Integer}(val::T, status::Status) = val & T(status) != 0
+@compat Base.:&{T <: Integer}(val::T, status::Status) = val & T(status) != 0
 
 function status_str(status::Integer)
     if status == -1
@@ -106,33 +106,33 @@ function status_str(status::Integer)
         join(selected, ", ")
     end
 end
-    
+
 # low-level libjack wrapper functions
 
 jack_client_open(name, options, statusref) =
     ccall((:jack_client_open, :libjack), ClientPtr,
         (Cstring, Cint, Ref{Cint}),
         name, 0, statusref)
-        
+
 jack_client_close(client) =
     ccall((:jack_client_close, :libjack), Cint, (ClientPtr, ), client)
-            
+
 jack_get_client_name(client) =
     ccall((:jack_get_client_name, :libjack), Cstring, (ClientPtr, ), client)
-    
+
 jack_get_sample_rate(client) =
     ccall((:jack_get_sample_rate, :libjack), NFrames, (ClientPtr, ), client)
-        
+
 jack_set_process_callback(client, callback, userdata) =
     ccall((:jack_set_process_callback, :libjack), Cint,
         (ClientPtr, CFunPtr, Ptr{Void}),
         client, callback, userdata)
-        
+
 jack_on_shutdown(client, callback, userdata) =
     ccall((:jack_on_shutdown, :libjack), Cint,
         (ClientPtr, CFunPtr, Ptr{Void}),
         client, callback, userdata)
-        
+
 jack_get_ports(client, portname, typename, flags) =
     ccall((:jack_get_ports, :libjack), Ptr{Cstring},
         (ClientPtr, Cstring, Cstring, Culong),
@@ -152,12 +152,12 @@ jack_port_register(client, portname, porttype, flags, bufsize) =
 jack_port_unregister(client, port) =
     ccall((:jack_port_unregister, :libjack), Cint, (ClientPtr, PortPtr),
         client, port)
-        
+
 jack_port_get_buffer(port, nframes) =
     ccall((:jack_port_get_buffer, :libjack), Ptr{JACKSample},
         (PortPtr, NFrames),
         port, nframes)
-        
+
 jack_ringbuffer_create(bytes) =
     ccall((:jack_ringbuffer_create, :libjack), Ptr{RingBuf}, (Csize_t, ), bytes)
 
