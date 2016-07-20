@@ -42,8 +42,9 @@ matrix:
             - jackd2
 script:
  - if [[ -a .git/shallow ]]; then git fetch --unshallow; fi
- - ulimit -a
  - |
+  sudo ulimit -l unlimited
+  ulimit -a
   jackd -r -p12 -ddummy -r48000 -p64 -w100000 -P0 -C0 &
   sleep 5
   julia -e 'Pkg.clone(pwd()); Pkg.build("JACKAudio"); Pkg.test("JACKAudio"; coverage=true)'
