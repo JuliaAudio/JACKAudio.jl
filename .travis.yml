@@ -44,6 +44,7 @@ script:
  - if [[ -a .git/shallow ]]; then git fetch --unshallow; fi
  # build prlimit
  - |
+  set -e
   pushd $PWD
   wget https://www.kernel.org/pub/linux/utils/util-linux/v2.25/util-linux-2.25.2.tar.gz
   tar -xzvf util-linux-2.25.2.tar.gz > /dev/null
@@ -54,6 +55,7 @@ script:
  # remove the limit on locked memory for this process
  - (test "$TRAVIS_OS_NAME" = "linux" && sudo $PWD/util-linux-2.25.2/prlimit --pid "$$" --memlock=unlimited:unlimited) || true
  - |
+  set -e
   ulimit -a
   jackd -r -p12 -ddummy -r48000 -p64 -w100000 -P0 -C0 &
   sleep 5
