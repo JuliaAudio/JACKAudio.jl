@@ -48,9 +48,8 @@ script:
   tar -xzvf util-linux-2.25.2.tar.gz
   cd util-linux-2.25.2
   ./configure ADJTIME_PATH=/var/lib/hwclock/adjtime --disable-chfn-chsh --disable-login --disable-nologin --disable-su --disable-setpriv --disable-runuser --disable-pylibmount --disable-static --without-python --without-systemd --without-systemdsystemunitdir --without-ncurses
-  # only compile prlimit
   make prlimit
- - (test "$TRAVIS_OS_NAME" = "linux" && sudo .travis/prlimit --pid "$$" --memlock=unlimited:unlimited) || true
+ - (test "$TRAVIS_OS_NAME" = "linux" && sudo util-linux-2.25.2/prlimit --pid "$$" --memlock=unlimited:unlimited) || true
  - |
   ulimit -a
   jackd -r -p12 -ddummy -r48000 -p64 -w100000 -P0 -C0 &
