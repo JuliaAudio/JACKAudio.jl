@@ -43,7 +43,8 @@ matrix:
 script:
  - if [[ -a .git/shallow ]]; then git fetch --unshallow; fi
  - |
-  sudo ulimit -l unlimited
+  # ulimit is a builtin so we have to do this crafty workaround
+  sudo sh -c "ulimit -l unlimited && exec su $LOGNAME"
   ulimit -a
   jackd -r -p12 -ddummy -r48000 -p64 -w100000 -P0 -C0 &
   sleep 5
