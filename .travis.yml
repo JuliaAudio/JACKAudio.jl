@@ -41,6 +41,7 @@ matrix:
             - jackd2
 script:
  - if [[ -a .git/shallow ]]; then git fetch --unshallow; fi
+ - ulimit -a
  - test/runtests.sh
  # - jackd -r -p24 -ddummy -r48000 -p2048 -w100000 &; sleep 5; julia -e 'Pkg.clone(pwd()); Pkg.build("JACKAudio"); Pkg.test("JACKAudio"; coverage=true)'
 after_success:
