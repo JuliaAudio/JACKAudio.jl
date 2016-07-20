@@ -43,7 +43,11 @@ matrix:
 script:
  - if [[ -a .git/shallow ]]; then git fetch --unshallow; fi
  - ulimit -a
- - test/runtests.sh
+ - |
+  jackd -r -p4 -ddummy -r48000 -p64 -w100000 -P0 -C0 &
+  sleep 5
+  julia -e 'Pkg.clone(pwd()); Pkg.build("JACKAudio"); Pkg.test("JACKAudio"; coverage=true)'
+  killall jackd
  # - jackd -r -p24 -ddummy -r48000 -p2048 -w100000 &; sleep 5; julia -e 'Pkg.clone(pwd()); Pkg.build("JACKAudio"); Pkg.test("JACKAudio"; coverage=true)'
 after_success:
   - julia -e 'cd(Pkg.dir("JACKAudio")); Pkg.add("Coverage"); using Coverage; Codecov.submit(process_folder())'
