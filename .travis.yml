@@ -5,6 +5,7 @@ language: julia
   # - osx
 notifications:
   email: false
+sudo: required
 matrix:
   include:
     - julia: 0.4
