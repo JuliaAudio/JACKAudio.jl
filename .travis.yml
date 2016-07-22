@@ -57,7 +57,7 @@ script:
  - |
   set -e
   ulimit -a
-  jackd -r -p12 -ddummy -r48000 -p64 -w100000 -P0 -C0 &
+  jackd -r -p12 -ddummy -r48000 -p4096 -w100000 -P0 -C0 &
   sleep 5
   julia -e 'Pkg.clone(pwd()); Pkg.build("JACKAudio"); Pkg.test("JACKAudio"; coverage=true)'
   killall jackd
