@@ -23,7 +23,7 @@ matrix:
         apt:
           packages:
             - jackd2
-    - julia: nightly
+    - julia: 0.5
       os: linux
       env:
         - JACKD=1
@@ -31,7 +31,7 @@ matrix:
         apt:
           packages:
             - jackd1
-    - julia: nightly
+    - julia: 0.5
       os: linux
       env:
         - JACKD=2
@@ -41,8 +41,6 @@ matrix:
             - jackd2
 script:
  - jackd -r -p24 -ddummy -r48000 -p2048 &
- # SampledSignals is unregistered so clone it for testing
- - julia -e 'Pkg.clone("https://github.com/JuliaAudio/SampledSignals.jl.git")'
  - if [[ -a .git/shallow ]]; then git fetch --unshallow; fi
  - julia -e 'Pkg.clone(pwd()); Pkg.build("JACKAudio"); Pkg.test("JACKAudio"; coverage=true)'
 after_success:

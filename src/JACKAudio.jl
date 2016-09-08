@@ -389,11 +389,11 @@ end
 
 # handle writes from a buffer with matching channel count and sample rate. Up/Down
 # mixing and resampling should be the responsibility of SampledSignals.jl
-function SampledSignals.unsafe_write(sink::JACKSink, buf::SampleBuf)
+function SampledSignals.unsafe_write(sink::JACKSink, buf::Array, frameoffset, framecount)
     isopen(sink) || return 0
     byteswritten = Csize_t(0)
-    totalbytes = Csize_t(nframes(buf) * sizeof(JACKSample))
-    chanptrs = Ptr{JACKSample}[channelptr(buf, c) for c in 1:nchannels(buf)]
+    totalbytes = Csize_t(framecount * sizeof(JACKSample))
+    chanptrs = Ptr{JACKSample}[channelptr(buf, c, frameoffset) for c in 1:nchannels(buf)]
     ports = sink.ports
 
     n = min(bytesavailable(sink), totalbytes)
@@ -415,7 +415,7 @@ function SampledSignals.unsafe_write(sink::JACKSink, buf::SampleBuf)
     end
 
     # by now we know we've written the whole length of the buffer
-    nframes(buf)
+    framecount
 end
 
 function overflowed(source::JACKSource)
@@ -439,11 +439,11 @@ end
 
 # read from the given source into the buffer, assuming that the channel count,
 # sample rate and element type match
-function SampledSignals.unsafe_read!(source::JACKSource, buf::SampleBuf)
+function SampledSignals.unsafe_read!(source::JACKSource, buf::Array, frameoffset, framecount)
     isopen(source) || return 0
     byteswritten = Csize_t(0)
-    totalbytes = Csize_t(nframes(buf) * sizeof(JACKSample))
-    chanptrs = Ptr{JACKSample}[channelptr(buf, ch) for ch in 1:nchannels(buf)]
+    totalbytes = Csize_t(framecount * sizeof(JACKSample))
+    chanptrs = Ptr{JACKSample}[channelptr(buf, ch, frameoffset) for ch in 1:nchannels(buf)]
     ports = source.ports
 
     # do the first read immediately
@@ -468,7 +468,7 @@ function SampledSignals.unsafe_read!(source::JACKSource, buf::SampleBuf)
     end
 
     # by now we know we've read the whole length of the buffer
-    nframes(buf)
+    framecount
 end
 
 function seekavailable(source::JACKSource)
