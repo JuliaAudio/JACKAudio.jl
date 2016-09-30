@@ -8,7 +8,6 @@ import Compat.ASCIIString
 using SampledSignals
 import SampledSignals: nchannels, samplerate, nframes
 using Base.Libc: malloc, free
-using SIUnits
 
 export JACKClient, sources, sinks, seekavailable
 
@@ -107,7 +106,7 @@ for (T, Super, porttype) in
         end
     end
 
-    @eval samplerate(stream::$T) = quantity(Int, Hz)(jack_get_sample_rate(stream.client))
+    @eval samplerate(stream::$T) = jack_get_sample_rate(stream.client)
     @eval nchannels(stream::$T) = length(stream.ports)
     @eval Base.eltype(stream::$T) = JACKSample
 
@@ -253,8 +252,7 @@ type JACKClient
     end
 end
 
-SampledSignals.samplerate(client::JACKClient) =
-    quantity(Int, Hz)(jack_get_sample_rate(client.ptr))
+SampledSignals.samplerate(client::JACKClient) = jack_get_sample_rate(client.ptr)
 
 # also allow constructing just by giving channel counts
 JACKClient(name::AbstractString,
