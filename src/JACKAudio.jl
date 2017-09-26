@@ -145,7 +145,7 @@ type JACKClient
     # process callback all the pointers it needs for the source/sink ports and
     # ringbuffers
     portptrs::Ptr{Ptr{Void}}
-    callback::Base.SingleAsyncWork
+    callback::Base.AsyncCondition
 
     # this constructor takes a list of name, channelcount pairs
     function JACKClient{T1 <: Tuple, T2 <: Tuple}(
@@ -226,7 +226,7 @@ type JACKClient
         unsafe_store!(portptrs, C_NULL, ptridx)
         ptridx += 1
 
-        client.callback = Base.SingleAsyncWork(data -> managebuffers(client))
+        client.callback = Base.AsyncCondition(data -> managebuffers(client))
 
         # and finally we store the callback handle so the JACK process callback
         # can trigger the managebuffers function to run in the julia context

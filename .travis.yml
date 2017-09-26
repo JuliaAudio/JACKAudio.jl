@@ -39,6 +39,22 @@ matrix:
         apt:
           packages:
             - jackd2
+    - julia: 0.6
+      os: linux
+      env:
+        - JACKD=1
+      addons:
+        apt:
+          packages:
+            - jackd1
+    - julia: 0.6
+      os: linux
+      env:
+        - JACKD=2
+      addons:
+        apt:
+          packages:
+            - jackd2
 script:
  - jackd -r -p24 -ddummy -r48000 -p2048 &
  - if [[ -a .git/shallow ]]; then git fetch --unshallow; fi
