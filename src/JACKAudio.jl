@@ -1,13 +1,9 @@
-__precompile__()
-
 module JACKAudio
-
-using Compat
-import Compat.ASCIIString
 
 using SampledSignals
 import SampledSignals: nchannels, samplerate, nframes
 using Base.Libc: malloc, free
+using Sockets
 
 export JACKClient, sources, sinks, seekavailable
 
@@ -24,19 +20,6 @@ const RINGBUF_SAMPLES = 131072
 # we'll advance the ringbuf read pointer by this many samples whenever we
 # detect an overflow.
 const OVERFLOW_ADVANCE = 8192
-
-function __init__()
-    global const process_cb = cfunction(process, Cint, (NFrames, Ptr{Ptr{Void}}))
-    global const shutdown_cb = cfunction(shutdown, Void, (Ptr{JACKClient}, ))
-    global const info_handler_cb = cfunction(info_handler, Void, (Cstring, ))
-    global const error_handler_cb = cfunction(error_handler, Void, (Cstring, ))
-
-
-    ccall((:jack_set_info_function, :libjack), Void, (Ptr{Void},),
-        info_handler_cb)
-    ccall((:jack_set_error_function, :libjack), Void, (Ptr{Void},),
-        error_handler_cb)
-end
 
 function error_handler(msg)
     println("libjack: ERROR: $(unsafe_string(msg))")
@@ -55,8 +38,8 @@ ringbuffer to get data in and out of the process callback and a julia RingBuffer
 object that can be used for additional buffering. One important difference is
 that if the jack ringbuffer fills up it can't be written to, but the Julia
 RingBuffer maintains the last N samples"""
-immutable JACKPort
-    name::ASCIIString
+struct JACKPort
+    name::String
     ptr::PortPtr
     jackbuf::RingBufPtr
 
@@ -86,10 +69,10 @@ for (T, Super, porttype) in
     as a group. There can be multiple JACKSources and JACKSinks in a JACKClient,
     and all the sources and sinks in a client get updated by the same `process`
     method."""
-    @eval immutable $T <: $Super
-        name::ASCIIString
+    @eval struct $T <: $Super
+        name::String
         client::ClientPtr
-        clientname::ASCIIString
+        clientname::String
         ports::Vector{JACKPort}
         ringcondition::Condition # used to synchronize any in-progress transations
 
@@ -136,22 +119,22 @@ end
 multiple `JACKSource`s and `JACKSink`s. It is automatically activated when it is
 constructed, so the sources and sinks are available for reading and writing,
 respectively."""
-type JACKClient
-    name::ASCIIString
+mutable struct JACKClient
+    name::String
     ptr::ClientPtr
     sources::Vector{JACKSource}
     sinks::Vector{JACKSink}
     # this is memory allocated separately with malloc that is used to give the
     # process callback all the pointers it needs for the source/sink ports and
     # ringbuffers
-    portptrs::Ptr{Ptr{Void}}
-    callback::Base.SingleAsyncWork
+    portptrs::Ptr{Ptr{Nothing}}
+    callback::Base.AsyncCondition
 
     # this constructor takes a list of name, channelcount pairs
-    function JACKClient{T1 <: Tuple, T2 <: Tuple}(
+    function JACKClient(
             name::AbstractString="Julia",
-            sources::Vector{T1}=[("In", 2)],
-            sinks::Vector{T2}=[("Out", 2)];
+            sources::Vector{<:Tuple}=[("In", 2)],
+            sinks::Vector{<:Tuple}=[("Out", 2)];
             connect=true, active=true)
         status = Ref{Cint}(Failure)
         clientptr = jack_client_open(name, 0, status)
@@ -175,7 +158,7 @@ type JACKClient
         nptrs = 2nsources + 2nsinks + 3
         # TODO: we can switch this malloc and unsafe_store business
         # to an array we push! to
-        portptrs = Ptr{Ptr{Void}}(malloc(nptrs*sizeof(Ptr{Void})))
+        portptrs = Ptr{Ptr{Nothing}}(malloc(nptrs*sizeof(Ptr{Nothing})))
         if isnullptr(portptrs)
             jack_client_close(clientptr)
             error("Failure allocating memory for JACK client \"$name\"")
@@ -226,7 +209,7 @@ type JACKClient
         unsafe_store!(portptrs, C_NULL, ptridx)
         ptridx += 1
 
-        client.callback = Base.SingleAsyncWork(data -> managebuffers(client))
+        client.callback = Base.AsyncCondition(data -> managebuffers(client))
 
         # and finally we store the callback handle so the JACK process callback
         # can trigger the managebuffers function to run in the julia context
@@ -264,8 +247,8 @@ JACKClient(sourcecount::Integer, sinkcount::Integer; kwargs...) =
 
 function Base.show(io::IO, client::JACKClient)
     print(io, "JACKClient(\"$(client.name)\", [")
-    sources = ASCIIString["(\"$(source.name)\", $(nchannels(source)))" for source in client.sources]
-    sinks = ASCIIString["(\"$(sink.name)\", $(nchannels(sink)))" for sink in client.sinks]
+    sources = String["(\"$(source.name)\", $(nchannels(source)))" for source in client.sources]
+    sinks = String["(\"$(sink.name)\", $(nchannels(sink)))" for sink in client.sinks]
     join(io, sources, ", ")
     print(io, "], [")
     join(io, sinks, ", ")
@@ -309,10 +292,10 @@ sinks(client::JACKClient) = client.sinks
 Base.read!(client::JACKClient, args...) = read!(client.sources[1], args...)
 Base.read(client::JACKClient, args...) = read(client.sources[1], args...)
 Base.write(client::JACKClient, args...) = write(client.sinks[1], args...)
-Base.connect(c1::JACKClient, c2::JACKClient) = connect(c1.sinks[1], c2.sources[1])
+Sockets.connect(c1::JACKClient, c2::JACKClient) = connect(c1.sinks[1], c2.sources[1])
 
 # TODO: julia PR to extend Base.isnull rather than using isnullptr
-isnullptr(ptr::Ptr) = Ptr{Void}(ptr) == C_NULL
+isnullptr(ptr::Ptr) = Ptr{Nothing}(ptr) == C_NULL
 isnullptr(ptr::Cstring) = Ptr{Cchar}(ptr) == C_NULL
 
 """Connect the given client to the physical input/output ports, by just matching
@@ -356,7 +339,7 @@ function autoconnect(client::JACKClient)
     end
 end
 
-function Base.connect(sink::JACKSink, source::JACKSource)
+function Sockets.connect(sink::JACKSink, source::JACKSource)
     for (sinkport, sourceport) in zip(sink.ports, source.ports)
         sinkportname = string(sink.clientname, ":", sinkport.name)
         sourceportname = string(source.clientname, ":", sourceport.name)
@@ -570,13 +553,13 @@ function process(nframes, portptrs)
 
     # notify the managebuffers, which will get called with a reference to
     # this client
-    ccall(:uv_async_send, Void, (Ptr{Void},), handle)
+    ccall(:uv_async_send, Nothing, (Ptr{Nothing},), handle)
 
     Cint(0)
 end
 
 """Returns the largest x <= value s.t. x has the given alignment (in bytes)"""
-align{T<:Unsigned}(value::T, alignment::Integer) = value & ~(T(alignment-1))
+align(value::T, alignment::Integer) where T<:Unsigned = value & ~(T(alignment-1))
 sampalign(value) = align(value, sizeof(JACKSample))
 
 # this callback gets called from within the Julia event loop, but is triggered
@@ -603,9 +586,22 @@ function shutdown(arg)
     nothing
 end
 
-memset(buf, val, count) = ccall(:memset, Ptr{Void},
-    (Ptr{Void}, Cint, Csize_t),
+memset(buf, val, count) = ccall(:memset, Ptr{Nothing},
+    (Ptr{Nothing}, Cint, Csize_t),
     buf, 0, count)
+
+function __init__()
+    global process_cb = @cfunction(process, Cint, (NFrames, Ptr{Ptr{Nothing}}))
+    global shutdown_cb = @cfunction(shutdown, Nothing, (Ptr{JACKClient}, ))
+    global info_handler_cb = @cfunction(info_handler, Nothing, (Cstring, ))
+    global error_handler_cb = @cfunction(error_handler, Nothing, (Cstring, ))
+
+
+    ccall((:jack_set_info_function, :libjack), Nothing, (Ptr{Nothing},),
+        info_handler_cb)
+    ccall((:jack_set_error_function, :libjack), Nothing, (Ptr{Nothing},),
+        error_handler_cb)
+end
 
 
 end # module

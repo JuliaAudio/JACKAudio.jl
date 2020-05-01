@@ -1,13 +1,13 @@
-typealias ClientPtr Ptr{Void}
-typealias PortPtr Ptr{Void}
-typealias CFunPtr Ptr{Void}
-typealias NFrames UInt32
-typealias JACKSample Cfloat
+const ClientPtr = Ptr{Nothing}
+const PortPtr = Ptr{Nothing}
+const CFunPtr = Ptr{Nothing}
+const NFrames = UInt32
+const JACKSample = Cfloat
 
 const JACK_DEFAULT_AUDIO_TYPE = "32 bit float mono audio"
 
 # this mirrors the struct defined in ringbuffer.h
-type RingBuf
+mutable struct RingBuf
     buf::Ptr{Cchar}
     write_ptr::Csize_t
     read_ptr::Csize_t
@@ -16,7 +16,7 @@ type RingBuf
     mlocked::Cint
 end
 # add typealias for consistency with other *Ptr types
-typealias RingBufPtr Ptr{RingBuf}
+const RingBufPtr = Ptr{RingBuf}
 
 @enum(Option,
     # Null value to use when no option bits are needed.
@@ -41,7 +41,7 @@ typealias RingBufPtr Ptr{RingBuf}
     SessionID = 0x20)
 
 # useful for OR'ing options together
-@compat Base.:|(l::Option, r::Option) = UInt(l) | UInt(r)
+Base.:|(l::Option, r::Option) = UInt(l) | UInt(r)
 
 @enum(PortFlag,
   PortIsInput = 0x01,
@@ -50,7 +50,7 @@ typealias RingBufPtr Ptr{RingBuf}
   PortCanMonitor = 0x08, 
   PortIsTerminal = 0x10)
 
-@compat Base.:|(l::PortFlag, r::PortFlag) = UInt(l) | UInt(r)
+Base.:|(l::PortFlag, r::PortFlag) = UInt(l) | UInt(r)
 
 # some functions also return a -1 on failure
 @enum(Status,
@@ -94,7 +94,7 @@ typealias RingBufPtr Ptr{RingBuf}
 status_str(status::Status) = string(status)
 
 # use & syntax for checking a flag, but return a boolean
-@compat Base.:&{T <: Integer}(val::T, status::Status) = val & T(status) != 0
+Base.:&(val::Integer, status::Status) = val & T(status) != 0
 
 function status_str(status::Integer)
     if status == -1
@@ -125,12 +125,12 @@ jack_get_sample_rate(client) =
 
 jack_set_process_callback(client, callback, userdata) =
     ccall((:jack_set_process_callback, :libjack), Cint,
-        (ClientPtr, CFunPtr, Ptr{Void}),
+        (ClientPtr, CFunPtr, Ptr{Nothing}),
         client, callback, userdata)
 
 jack_on_shutdown(client, callback, userdata) =
     ccall((:jack_on_shutdown, :libjack), Cint,
-        (ClientPtr, CFunPtr, Ptr{Void}),
+        (ClientPtr, CFunPtr, Ptr{Nothing}),
         client, callback, userdata)
 
 jack_get_ports(client, portname, typename, flags) =
@@ -142,7 +142,7 @@ jack_connect(client, src, dest) =
     ccall((:jack_connect, :libjack), Cint, (ClientPtr, Cstring, Cstring),
     client, src, dest)
 
-jack_free(ptr) = ccall((:jack_free, :libjack), Void, (Ptr{Void}, ), ptr)
+jack_free(ptr) = ccall((:jack_free, :libjack), Nothing, (Ptr{Nothing}, ), ptr)
 
 jack_port_register(client, portname, porttype, flags, bufsize) =
     ccall((:jack_port_register, :libjack), PortPtr,
@@ -162,14 +162,14 @@ jack_ringbuffer_create(bytes) =
     ccall((:jack_ringbuffer_create, :libjack), Ptr{RingBuf}, (Csize_t, ), bytes)
 
 jack_ringbuffer_free(buf) =
-    ccall((:jack_ringbuffer_free, :libjack), Void, (Ptr{RingBuf}, ), buf)
+    ccall((:jack_ringbuffer_free, :libjack), Nothing, (Ptr{RingBuf}, ), buf)
 
 jack_ringbuffer_read(ringbuf, dest, bytes) =
     ccall((:jack_ringbuffer_read, :libjack), Csize_t,
-        (Ptr{RingBuf}, Ptr{Void}, Csize_t), ringbuf, dest, bytes)
+        (Ptr{RingBuf}, Ptr{Nothing}, Csize_t), ringbuf, dest, bytes)
 
 jack_ringbuffer_read_advance(ringbuf, bytes) =
-    ccall((:jack_ringbuffer_read_advance, :libjack), Void,
+    ccall((:jack_ringbuffer_read_advance, :libjack), Nothing,
         (Ptr{RingBuf}, Csize_t), ringbuf, bytes)
 
 jack_ringbuffer_read_space(ringbuf) =
@@ -178,7 +178,7 @@ jack_ringbuffer_read_space(ringbuf) =
 
 jack_ringbuffer_write(ringbuf, src, bytes) =
     ccall((:jack_ringbuffer_write, :libjack), Csize_t,
-        (Ptr{RingBuf}, Ptr{Void}, Csize_t), ringbuf, src, bytes)
+        (Ptr{RingBuf}, Ptr{Nothing}, Csize_t), ringbuf, src, bytes)
 
 jack_ringbuffer_write_space(ringbuf) =
     ccall((:jack_ringbuffer_write_space, :libjack), Csize_t,
