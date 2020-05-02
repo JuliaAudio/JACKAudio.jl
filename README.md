@@ -1,5 +1,9 @@
 # JACKAudio
 
+**This Package is currently unmaintained. For streaming audio input and output see [PortAudio.jl](https://github.com/juliaaudio/portaudio.jl).**
+
+As of May 1, 2020 PortAudio.jl doesn't support JACK, but adding JACK support to it is probably a better path forward than maintaining JACKAudio.jl separately. See [this issue on adding JACK support to PortAudio.jl](https://github.com/JuliaAudio/PortAudio.jl/issues/49) for more details.
+
 [![Build Status](https://travis-ci.org/JuliaAudio/JACKAudio.jl.svg?branch=master)](https://travis-ci.org/JuliaAudio/JACKAudio.jl)
 [![codecov.io](https://codecov.io/github/JuliaAudio/JACKAudio.jl/coverage.svg?branch=master)](https://codecov.io/github/JuliaAudio/JACKAudio.jl?branch=master)
 
