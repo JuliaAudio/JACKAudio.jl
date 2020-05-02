@@ -1,13 +1,6 @@
 module JACKAudioTests
 
-using Compat
-import Compat.ASCIIString
-
-if VERSION >= v"0.5.0-"
-    using Base.Test
-else
-    using BaseTestNext
-end
+using Test
 using JACKAudio
 using SampledSignals
 

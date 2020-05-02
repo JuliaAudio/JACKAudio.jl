@@ -1,0 +1,14 @@
+name = "JACKAudio"
+uuid = "e15094ee-46e5-4090-b60c-bc5c382a8256"
+version = "0.1.0"
+
+[deps]
+SampledSignals = "bd7594eb-a658-542f-9e75-4c4d8908c167"
+Sockets = "6462fe0b-24de-5631-8697-dd941f90decc"
+
+[extras]
+Test = "8dfed614-e22c-5e08-85e1-65c5234f0b40"
+
+[targets]
+test = ["Test"]
+
