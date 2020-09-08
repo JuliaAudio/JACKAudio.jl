@@ -7,7 +7,7 @@ notifications:
   email: false
 matrix:
   include:
-    - julia: 0.4
+    - julia: 0.5
       os: linux
       env:
         - JACKD=1
@@ -15,7 +15,7 @@ matrix:
         apt:
           packages:
             - jackd1
-    - julia: 0.4
+    - julia: 0.5
       os: linux
       env:
         - JACKD=2
@@ -23,7 +23,7 @@ matrix:
         apt:
           packages:
             - jackd2
-    - julia: 0.5
+    - julia: 0.6
       os: linux
       env:
         - JACKD=1
@@ -31,7 +31,7 @@ matrix:
         apt:
           packages:
             - jackd1
-    - julia: 0.5
+    - julia: 0.6
       os: linux
       env:
         - JACKD=2
